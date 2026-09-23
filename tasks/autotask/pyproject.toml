@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uran-autotask-plugin"
+version = "0.1.0"
+description = "URAN waypoint and outdoor mission state machines"
+requires-python = ">=3.10"
+dependencies = [
+  "uran-localization-plugin>=0.1.0",
+  "uran-navigation-plugin>=0.1.0",
+  "uran-worker-sdk>=1,<2",
+  "uran-interfaces>=1,<2",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+uran-autotask-worker = "uran_autotask_plugin.worker:main"
+
+[tool.setuptools]
+include-package-data = false
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = false

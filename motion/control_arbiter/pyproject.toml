@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uran-control-arbiter-plugin"
+version = "0.1.0"
+description = "Per-resource control lease arbitration for URAN motion components"
+requires-python = ">=3.10"
+dependencies = ["uran-worker-sdk>=1,<2", "uran-interfaces>=1,<2"]
+
+[project.scripts]
+uran-control-arbiter-worker = "uran_control_arbiter_plugin.worker:main"
+
+[tool.setuptools]
+include-package-data = false
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = false

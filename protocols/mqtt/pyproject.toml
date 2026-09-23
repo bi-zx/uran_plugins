@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uran-mqtt-plugin"
+version = "0.1.0"
+description = "URAN legacy cloud codec and MQTT transport worker"
+requires-python = ">=3.10"
+dependencies = ["uran-worker-sdk>=1,<2", "uran-interfaces>=1,<2"]
+
+[project.optional-dependencies]
+mqtt = ["paho-mqtt>=1.6,<3"]
+test = ["pytest>=7"]
+
+[project.scripts]
+uran-mqtt-worker = "uran_mqtt_plugin.worker:main"
+
+[tool.setuptools]
+include-package-data = false
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = false

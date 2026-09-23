@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uran-navigation-plugin"
+version = "0.1.0"
+description = "URAN depth-scan conversion and guarded local velocity navigation"
+requires-python = ">=3.10"
+dependencies = ["uran-worker-sdk>=1,<2", "uran-interfaces>=1,<2"]
+
+[project.scripts]
+uran-navigation-worker = "uran_navigation_plugin.worker:main"
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.setuptools]
+include-package-data = false
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = false

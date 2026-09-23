@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uran-simulation-plugin"
+version = "0.1.0"
+description = "Deterministic multi-component URAN motion simulator"
+requires-python = ">=3.10"
+dependencies = ["uran-worker-sdk>=1,<2", "uran-interfaces>=1,<2"]
+
+[project.scripts]
+uran-simulation-worker = "uran_simulation_plugin.worker:main"
+
+[tool.setuptools]
+include-package-data = false
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = false
