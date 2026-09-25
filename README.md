@@ -13,6 +13,7 @@ package imports source from the old workspace.
 | `uran-mqtt-plugin` | MQTT transport and legacy cloud boundary codec | codec-only mode |
 | `uran-cyberdog2-plugin` | base motion policy, failsafe and vendor mapping | deterministic simulator |
 | `uran-control-arbiter-plugin` | per-resource control leases | pure state machine |
+| `uran-px4-plugin` | ROS 1/PX4 aerial motion and OFFBOARD-safe setpoints | deterministic simulator |
 | `uran-media-plugin` | media sessions, WebRTC/RTSP and camera adapters | explicit memory simulator |
 | `uran-localization-plugin` | GPS/VO alignment, geo projection and fusion | pure algorithms |
 | `uran-navigation-plugin` | depth scan, obstacle avoidance, safety gate and route follower | pure algorithms |
@@ -33,7 +34,7 @@ For an interactive source environment:
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install ../uran_framework/python/uran_worker_sdk ../uran_interfaces
-.venv/bin/pip install -e protocols/mqtt -e motion/cyberdog2 -e motion/control_arbiter -e media
+.venv/bin/pip install -e protocols/mqtt -e motion/cyberdog2 -e motion/control_arbiter -e motion/px4 -e media
 .venv/bin/pip install -e sensors/localization -e sensors/navigation -e tasks/autotask
 .venv/bin/pip install -e simulation
 ```

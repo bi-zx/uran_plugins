@@ -62,12 +62,12 @@ fi
   "${dependency_options[@]}" "${dependency_specs[@]}"
 "$test_env/bin/pip" install --no-build-isolation --no-deps \
   "$repo_dir/protocols/mqtt" "$repo_dir/motion/cyberdog2" \
-  "$repo_dir/motion/control_arbiter" "$repo_dir/media" \
+  "$repo_dir/motion/control_arbiter" "$repo_dir/motion/px4" "$repo_dir/media" \
   "$repo_dir/sensors/localization" "$repo_dir/sensors/navigation" \
   "$repo_dir/tasks/autotask" "$repo_dir/simulation"
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 "$test_env/bin/python" -m pytest "$repo_dir"
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 "$test_env/bin/python" -m pytest --import-mode=importlib "$repo_dir"
 clean_python_artifacts
-for package in protocols/mqtt motion/cyberdog2 motion/control_arbiter media sensors/localization sensors/navigation tasks/autotask simulation; do
+for package in protocols/mqtt motion/cyberdog2 motion/control_arbiter motion/px4 media sensors/localization sensors/navigation tasks/autotask simulation; do
   clean_python_artifacts
   "$test_env/bin/python" -m build --wheel --no-isolation --outdir "$repo_dir/dist" "$repo_dir/$package"
 done

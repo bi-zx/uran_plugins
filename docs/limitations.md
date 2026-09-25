@@ -15,5 +15,7 @@ broker acceptance.
 The autotask worker validates and manages task lifecycle. Physical navigation
 requires a ROS2 backend in `uran_ros2_adapter` to translate task dispatch,
 pose/scan observations and media actions. Missing backends fail; they are not
-reported as successful operations. ROS1/PX4 migration and the `uran_profiles`
-deployment repository are outside this phase.
+reported as successful operations. The ROS1/PX4 software migration now has a
+Noetic catkin bridge, deterministic PX4 controller tests, and a Python 3.8
+compatible worker path. Vendor PX4 message packages, real flight validation,
+and the `uran_profiles` deployment repository remain outside this phase.

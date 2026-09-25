@@ -8,6 +8,7 @@ from uran_autotask_plugin.worker import worker_factory as autotask_factory
 from uran_cyberdog2_plugin.worker import worker_factory as cyberdog_factory
 from uran_media_plugin.worker import worker_factory as media_factory
 from uran_mqtt_plugin.worker import worker_factory as mqtt_factory
+from uran_px4_plugin.worker import worker_factory as px4_factory
 
 
 def _run(factory, frames):
@@ -83,3 +84,21 @@ def test_mqtt_worker_decodes_control_state_param_and_media_boundaries():
         }))
         assert replies[3]["ok"] is True
         assert replies[3]["payload"]["message_type"] == cloud["msg_type"]
+
+
+def test_px4_worker_simulation_requires_trigger_before_motion():
+    now = time.time_ns()
+    command = {"schema_version": "1.0", "operation_id": "op-1",
+               "target": {"device_id": "drone", "component_id": "aerial"},
+               "controller": "cloud", "sequence": 1, "issued_at_ns": now,
+               "valid_until_ns": now + 1_000_000_000,
+               "payload": {"kind": "base_velocity", "frame_id": "base_link",
+                            "linear_mps": {"x": 0.2, "y": 0, "z": 0},
+                            "angular_rps": {"x": 0, "y": 0, "z": 0}}}
+    replies = _run(px4_factory, _lifecycle({"backend": "simulation",
+                                             "device_id": "drone",
+                                             "component_id": "aerial"}, {
+        "message_type": "uran.motion.command.v1", "payload": command,
+    }))
+    assert replies[3]["status"] == "failed"
+    assert replies[3]["payload"]["code"] == "E_NOT_READY"

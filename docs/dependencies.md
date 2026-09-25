@@ -6,6 +6,7 @@
 | contract validation and typed documents | `uran-interfaces` 1.x | required by deployment/integration tests |
 | MQTT transport | `paho-mqtt` 1.6 through 2.x, broker credentials | optional extra; codec works without it |
 | CyberDog2 real motion | ROS2 `rclpy`, Xiaomi `protocol.msg`/`protocol.srv` | vendor environment; not redistributed |
+| PX4 real motion | ROS1 Noetic `rospy`, `mavros_msgs`, `quadrotor_msgs`, `nav_msgs` | vendor environment; the worker falls back to no hardware-free simulator only when explicitly configured |
 | WebRTC | `aiortc`, `av`, `numpy` | optional `webrtc` extra |
 | RTSP | GObject introspection, GStreamer, `GstRtspServer`, x264 | system/vendor packages |
 | CyberDog2 camera | Xiaomi `protocol.srv.CameraService` | vendor environment |

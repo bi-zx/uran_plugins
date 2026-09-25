@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uran-px4-plugin"
+version = "0.1.0"
+description = "ROS 1/PX4 motion worker with OFFBOARD-safe setpoint handling"
+requires-python = ">=3.8"
+dependencies = ["uran-worker-sdk>=1,<2", "uran-interfaces>=1,<2"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+uran-px4-worker = "uran_px4_plugin.worker:main"
+
+[tool.setuptools]
+include-package-data = false
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = false

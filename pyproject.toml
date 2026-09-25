@@ -22,7 +22,7 @@ testpaths = [
   "tasks/autotask/tests",
   "tests",
 ]
-addopts = "-ra"
+addopts = "-ra --import-mode=importlib"
 
 [tool.hatch.build.targets.wheel]
 packages = []
