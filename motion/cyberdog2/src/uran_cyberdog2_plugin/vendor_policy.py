@@ -1,9 +1,13 @@
 """CyberDog2 vendor-state policy with an injectable transport and clock."""
 
-from __future__ import annotations
-
 import time
-from typing import Any, Callable, Dict, Protocol
+from typing import Any, Callable, Dict
+
+try:
+    from typing import Protocol
+except ImportError:  # Python 3.6
+    class Protocol(object):
+        pass
 
 from .controller import MotionCommand, MotionResult
 

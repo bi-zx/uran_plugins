@@ -5,8 +5,6 @@ ROS, but construction fails clearly unless those vendor interfaces exist.
 Hardware execution has not been validated in this migration environment.
 """
 
-from __future__ import annotations
-
 import time
 from typing import Any, Dict
 

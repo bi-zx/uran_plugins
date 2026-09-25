@@ -1,11 +1,15 @@
 """CyberDog2 motion policy separated from the ROS2 vendor transport."""
 
-from __future__ import annotations
-
 from dataclasses import asdict, dataclass, field, replace
 import math
 import time
-from typing import Any, Dict, Optional, Protocol
+from typing import Any, Dict, Optional
+
+try:
+    from typing import Protocol
+except ImportError:  # Python 3.6
+    class Protocol(object):
+        pass
 
 
 @dataclass

@@ -1,12 +1,10 @@
-from __future__ import annotations
-
 import json
 import math
 import threading
 import time
 from typing import Any, Mapping
 
-from uran_worker_sdk import Worker, WorkerServer
+from uran_worker_sdk import Worker, WorkerServer, now_ns
 from uran_interfaces import ContractValidator
 
 from .controller import MotionCommand, MotionController, SimulatedBackend
@@ -145,7 +143,7 @@ class CyberDogWorker(Worker):
             raise ValueError("motion command targets another device")
         if self.expected_component_id and target["component_id"] != self.expected_component_id:
             raise ValueError("motion command targets another component")
-        if int(document["valid_until_ns"]) <= time.time_ns():
+        if int(document["valid_until_ns"]) <= now_ns():
             raise ValueError("motion command is expired")
         sequence_key = (target["device_id"], target["component_id"], document["controller"])
         sequence = int(document["sequence"])

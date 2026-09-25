@@ -1,10 +1,14 @@
-from __future__ import annotations
-
 import asyncio
 from dataclasses import dataclass
 import json
 import threading
-from typing import Any, Dict, Protocol
+from typing import Any, Dict
+
+try:
+    from typing import Protocol
+except ImportError:  # Python 3.6
+    class Protocol(object):
+        pass
 
 from .cyberdog2_webrtc_bridge import from_img_trans, make_stop, to_img_trans
 from .rtsp_server import RTSPServer

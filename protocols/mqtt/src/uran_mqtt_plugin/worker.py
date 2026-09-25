@@ -1,11 +1,9 @@
-from __future__ import annotations
-
 import threading
 import time
 import re
 from typing import Any, Mapping
 
-from uran_worker_sdk import Worker, WorkerServer
+from uran_worker_sdk import Worker, WorkerServer, now_ns
 
 from .client import MqttClient
 from .codec import CloudCodec
@@ -45,7 +43,7 @@ class MqttWorker(Worker):
         if time.monotonic() < self._commands_enabled_at:
             self._publish_legacy({
                 "msg_type": "command_rejected", "msg_version": "1.0",
-                "device_id": self.default_device_id, "timestamp_ns": time.time_ns(),
+                "device_id": self.default_device_id, "timestamp_ns": now_ns(),
                 "reason": "mqtt_reconnect_recovery_delay",
                 "original_msg_type": str(payload.get("msg_type") or ""),
             })
@@ -53,7 +51,7 @@ class MqttWorker(Worker):
         with self._sequence_lock:
             self._sequence += 1
             sequence = self._sequence
-        received_at_ns = time.time_ns()
+        received_at_ns = now_ns()
         operation_id = str(payload.get("operation_id") or payload.get("request_id") or
                            f"mqtt-{received_at_ns}-{sequence}")
         message = self.codec.decode_public(
@@ -132,7 +130,7 @@ class MqttWorker(Worker):
             device_id=str(source.get("device_id") or self.default_device_id),
             source=str(source.get("component_id") or source.get("instance_id") or "runtime"),
             data_type=str(message.get("message_type") or "unknown"),
-            timestamp_ns=time.time_ns(),
+            timestamp_ns=now_ns(),
             payload=message.get("payload"),
         )
         if message.get("correlation_id"):
@@ -182,14 +180,14 @@ class MqttWorker(Worker):
                 pass
 
     def _dispatch_failsafe(self, reason: str) -> None:
-        now_ns = time.time_ns()
+        now_ns_value = now_ns()
         for index, configured in enumerate(self.failsafe_targets, start=1):
             target = {key: str(configured.get(key) or "") for key in
                       ("device_id", "component_id", "instance_id", "capability_id")}
             target = {key: value for key, value in target.items() if value}
             if not target.get("device_id") or not target.get("component_id"):
                 continue
-            operation_id = f"mqtt-failsafe-{now_ns}-{index}"
+            operation_id = f"mqtt-failsafe-{now_ns_value}-{index}"
             command_target = {"device_id": target["device_id"],
                               "component_id": target["component_id"]}
             try:
@@ -200,8 +198,8 @@ class MqttWorker(Worker):
                     "payload": {
                         "schema_version": "1.0", "operation_id": operation_id,
                         "target": command_target, "controller": "mqtt-failsafe",
-                        "sequence": now_ns + index, "issued_at_ns": now_ns,
-                        "valid_until_ns": now_ns + 1_000_000_000,
+                        "sequence": now_ns_value + index, "issued_at_ns": now_ns_value,
+                        "valid_until_ns": now_ns_value + 1_000_000_000,
                         "payload": {"kind": "safety_action", "action": "stop",
                                     "reason": reason},
                         "metadata": {"source": "mqtt-failsafe"},
@@ -243,7 +241,7 @@ class MqttWorker(Worker):
                        str(item.get("device_id")) == self.default_device_id)]
         return self._publish_legacy({
             "msg_type": "state_snapshot", "msg_version": "1.0",
-            "device_id": self.default_device_id, "timestamp_ns": time.time_ns(),
+            "device_id": self.default_device_id, "timestamp_ns": now_ns(),
             "reason": reason, "changed_fields": list(changed_fields or []),
             "schema_version": str(document.get("schema_version") or "1.0"),
             "components": components,
@@ -257,7 +255,7 @@ class MqttWorker(Worker):
                 continue
             self._publish_legacy({
                 "msg_type": "heartbeat", "msg_version": "1.0",
-                "device_id": self.default_device_id, "timestamp_ns": time.time_ns(),
+                "device_id": self.default_device_id, "timestamp_ns": now_ns(),
             })
             self._publish_state_snapshot(reason="periodic")
 

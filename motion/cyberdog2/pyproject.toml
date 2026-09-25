@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "uran-cyberdog2-plugin"
 version = "0.1.0"
 description = "URAN CyberDog2 motion policy with simulation and ROS2 vendor backends"
-requires-python = ">=3.10"
+requires-python = ">=3.6"
 dependencies = ["uran-worker-sdk>=1,<2", "uran-interfaces>=1,<2"]
 
 [project.optional-dependencies]

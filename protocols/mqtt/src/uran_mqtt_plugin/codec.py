@@ -1,13 +1,12 @@
 """Strict boundary conversion for the legacy 1.0 cloud protocol."""
 
-from __future__ import annotations
-
 import json
 import math
 import time
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, Optional
 
 from uran_interfaces import ComponentTarget
+from uran_worker_sdk import now_ns
 
 
 class DecodeError(ValueError):
@@ -139,7 +138,7 @@ class CloudCodec:
         default_device_id: str,
         default_component_id: str,
         validity_window_ns: int = 1_000_000_000,
-        received_at_ns: int | None = None,
+        received_at_ns: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Convert a legacy cloud command into a routed platform message."""
         decoded = self.decode(payload)
@@ -152,7 +151,7 @@ class CloudCodec:
         if not target.get("device_id") or not target.get("component_id"):
             raise DecodeError("device_id and component_id are required for routing")
 
-        timestamp_ns = int(legacy_body.get("timestamp_ns") or received_at_ns or time.time_ns())
+        timestamp_ns = int(legacy_body.get("timestamp_ns") or received_at_ns or now_ns())
         if legacy_type == "move_cmd":
             action = str(legacy_body.get("action") or "").strip().lower()
             if action:

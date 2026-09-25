@@ -1,6 +1,7 @@
 """T1.3 MQTT 客户端 — 入网、注册、心跳"""
 import json
 import logging
+import os
 import threading
 import time
 from typing import Callable, Dict, Optional
@@ -44,12 +45,19 @@ class MqttClient:
         self._template_id = net_cfg.get('template_id', 'template_001')
         auth_cfg = net_cfg.get('auth', {})
         configured_username = auth_cfg.get('username', '')
+        username_env = auth_cfg.get('username_env', '')
+        if username_env:
+            configured_username = os.environ.get(str(username_env), configured_username)
         # Keep compatibility with deployments that used device_id as the
         # MQTT username before auth.username was introduced.
         if configured_username in ('', 'changeme', None):
             configured_username = self._device_id
         self._mqtt_username = configured_username
-        self._token = auth_cfg.get('token', '')
+        token = auth_cfg.get('token', '')
+        token_env = auth_cfg.get('token_env', '')
+        if token_env:
+            token = os.environ.get(str(token_env), token)
+        self._token = token
         self._broker_host = mqtt_cfg.get('broker_host', 'localhost')
         self._broker_port = int(mqtt_cfg.get('broker_port', 1883))
         self._keepalive = int(mqtt_cfg.get('keepalive', 60))
