@@ -223,12 +223,31 @@ class MqttWorker(Worker):
         return True
 
     def _publish_state_snapshot(self, *, reason: str, changed_fields=None) -> bool:
-        with self._state_lock:
-            fields = dict(self._state)
+        try:
+            document = dict(self.runtime_snapshot())
+        except Exception:
+            # Keep standalone SDK tests and older hosts functional.  A Runtime
+            # host exposes the canonical document and therefore does not use
+            # this fallback in production.
+            with self._state_lock:
+                fields = dict(self._state)
+            document = {"schema_version": "1.0", "components": [],
+                        "unscoped_fields": dict(fields), "fields": fields}
+        fields = dict(document.get("fields") or {})
+        # The Runtime document is authoritative.  Keep every component entry
+        # belonging to this MQTT worker's device so every component ID on the
+        # device is visible without leaking another device's state.
+        components = [dict(item) for item in (document.get("components") or [])
+                      if isinstance(item, Mapping) and
+                      (not item.get("device_id") or
+                       str(item.get("device_id")) == self.default_device_id)]
         return self._publish_legacy({
             "msg_type": "state_snapshot", "msg_version": "1.0",
             "device_id": self.default_device_id, "timestamp_ns": time.time_ns(),
             "reason": reason, "changed_fields": list(changed_fields or []),
+            "schema_version": str(document.get("schema_version") or "1.0"),
+            "components": components,
+            "unscoped_fields": dict(document.get("unscoped_fields") or {}),
             "fields": fields,
         })
 

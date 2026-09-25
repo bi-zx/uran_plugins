@@ -7,7 +7,7 @@ from uran_worker_sdk import WorkerServer
 from uran_autotask_plugin.worker import worker_factory as autotask_factory
 from uran_cyberdog2_plugin.worker import worker_factory as cyberdog_factory
 from uran_media_plugin.worker import worker_factory as media_factory
-from uran_mqtt_plugin.worker import worker_factory as mqtt_factory
+from uran_mqtt_plugin.worker import MqttWorker, worker_factory as mqtt_factory
 from uran_px4_plugin.worker import worker_factory as px4_factory
 
 
@@ -84,6 +84,33 @@ def test_mqtt_worker_decodes_control_state_param_and_media_boundaries():
         }))
         assert replies[3]["ok"] is True
         assert replies[3]["payload"]["message_type"] == cloud["msg_type"]
+
+
+def test_mqtt_state_snapshot_preserves_all_runtime_components():
+    worker = MqttWorker()
+    worker.configure({"transport_enabled": False, "device_id": "robot"})
+
+    published = []
+
+    class Client:
+        def publish_uplink(self, payload):
+            published.append(payload)
+            return True
+
+    worker.client = Client()
+    worker.runtime_snapshot = lambda: {
+        "schema_version": "1.0",
+        "device_id": "robot",
+        "components": [
+            {"device_id": "robot", "component_id": "base", "instances": [], "fields": {}},
+            {"device_id": "robot", "component_id": "arm", "instances": [], "fields": {}},
+        ],
+        "unscoped_fields": {},
+        "fields": {},
+    }
+
+    assert worker._publish_state_snapshot(reason="periodic") is True
+    assert [item["component_id"] for item in published[0]["components"]] == ["base", "arm"]
 
 
 def test_px4_worker_simulation_requires_trigger_before_motion():
