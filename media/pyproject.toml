@@ -7,7 +7,7 @@ name = "uran-media-plugin"
 version = "0.1.0"
 description = "URAN WebRTC, RTSP and camera backends"
 requires-python = ">=3.6"
-dependencies = ["uran-worker-sdk>=1,<2", "uran-interfaces>=1,<2"]
+dependencies = ["uran-worker-sdk>=1,<2", "uran-interfaces>=1,<2", "PyYAML>=5"]
 
 [project.optional-dependencies]
 webrtc = ["aiortc>=1.7", "av>=11", "numpy>=1.23"]
