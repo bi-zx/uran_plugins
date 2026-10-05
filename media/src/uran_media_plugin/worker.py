@@ -50,14 +50,6 @@ class MediaWorker(Worker):
 
     def configure(self, config: Mapping[str, Any]) -> None:
         config = dict(config)
-        if config.get("source_config_file"):
-            import yaml
-            with open(str(config["source_config_file"])) as stream:
-                original = (yaml.safe_load(stream) or {}).get("uran_media") or {}
-            config["webrtc"] = dict(original.get("webrtc") or {}, **dict(config.get("webrtc") or {}))
-            config["video_sources"] = list(original.get("video_sources") or [])
-            config["realsense"] = dict(original.get("realsense") or {})
-        self.source_config = config
         self.validator = ContractValidator()
         self._ros = None
         self._closables = []

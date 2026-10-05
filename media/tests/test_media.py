@@ -7,17 +7,15 @@ from uran_media_plugin import webrtc_channel
 from uran_media_plugin.webrtc_channel import WebRTCChannel
 
 
-def test_original_media_config_is_loaded_with_explicit_backend_override(tmp_path):
+def test_inline_media_config_is_loaded_with_explicit_backend_override():
     from uran_media_plugin.worker import MediaWorker
-    source = tmp_path / "media.yaml"
-    source.write_text("uran_media:\n  webrtc:\n    stun_server: stun:example.test:3478\n    turn_servers: [{url: 'turn:example.test:3478', username: test, credential: secret}]\n  video_sources: [{channel_id: front_cam, ros_topic: /camera/image_raw}]\n")
     worker = MediaWorker()
-    worker.configure({"simulation": True, "source_config_file": str(source),
-                      "webrtc": {"implementation": "cyberdog2"}})
+    worker.configure({"simulation": True, "webrtc": {
+        "implementation": "cyberdog2", "stun_server": "stun:example.test:3478",
+        "turn_servers": [{"url": "turn:example.test:3478", "username": "test", "credential": "secret"}]}})
     assert worker._defaults["webrtc"]["stun_server"] == "stun:example.test:3478"
     assert worker._defaults["webrtc"]["turn_servers"][0]["credential"] == "secret"
     assert worker._defaults["webrtc"]["implementation"] == "cyberdog2"
-    assert worker.source_config["video_sources"][0]["channel_id"] == "front_cam"
 
 
 def test_missing_backend_is_an_explicit_failure():
