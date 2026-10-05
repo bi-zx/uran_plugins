@@ -19,6 +19,7 @@ package imports source from the old workspace.
 | `uran-navigation-plugin` | depth scan, obstacle avoidance, safety gate and route follower | pure algorithms |
 | `uran-autotask-plugin` | waypoint/outdoor parsing and mission lifecycle | worker task store |
 | `uran-simulation-plugin` | independent base/dual-arm/gripper components | always simulated |
+| `uran-so101-plugin` | SO101/Feetech arm bus, LeRobot-compatible FK/IK and safety | simulation backend |
 
 Install packages into an isolated worker environment. A released deployment
 installs the `uran-worker-sdk` and `uran-interfaces` wheels from its locked
@@ -36,7 +37,7 @@ python3 -m venv .venv
 .venv/bin/pip install ../uran_framework/python/uran_worker_sdk ../uran_interfaces
 .venv/bin/pip install -e protocols/mqtt -e motion/cyberdog2 -e motion/control_arbiter -e motion/px4 -e media
 .venv/bin/pip install -e sensors/localization -e sensors/navigation -e tasks/autotask
-.venv/bin/pip install -e simulation
+.venv/bin/pip install -e simulation -e motion/so101
 ```
 
 Run a worker through the framework SDK, for example:

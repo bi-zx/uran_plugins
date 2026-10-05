@@ -18,3 +18,14 @@ config:
 Production paths use absolute executables from an installed, locked venv. They
 do not source this repository. The simulator must be selected explicitly in a
 Profile and its results carry `simulation: true`.
+
+## SO101 arm
+
+`motion/so101` is a ROS-independent worker for the six-joint SO101 follower.
+It accepts `arm_joints`, Cartesian `arm_pose` (damped least-squares IK), and
+`safety_action` commands. `serial_port` belongs in the profile's
+`worker_config`; use a persistent `/dev/serial/by-id/...` path on hardware or
+`auto` during discovery. The LeRobot safety JSON and a YAML calibration file
+are separate inputs. Torque is disabled by default, and the calibration tool
+is available as `uran-so101-calibrate probe`, `record-center`, and
+`record-limits`.
