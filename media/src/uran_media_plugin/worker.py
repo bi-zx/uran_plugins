@@ -51,6 +51,8 @@ class MediaWorker(Worker):
     def configure(self, config: Mapping[str, Any]) -> None:
         config = dict(config)
         self.validator = ContractValidator()
+        self.state_reporting = bool(config.get("state_reporting", True))
+        self.channel_metadata = self._channel_metadata(config)
         self._ros = None
         self._closables = []
         self._defaults = {key: dict(config.get(key) or {}) for key in ("webrtc", "rtsp")}
@@ -60,6 +62,45 @@ class MediaWorker(Worker):
         elif str(config.get("backend") or "") == "ros2":
             backends = self._configure_ros2(config)
         self.manager = MediaManager(backends)
+        self._register_media_state()
+        self._publish_media_state()
+
+    @staticmethod
+    def _channel_metadata(config: Mapping[str, Any]):
+        """Normalize profile channel declarations to the legacy list format."""
+        configured = config.get("channel_metadata") or config.get("video_sources") or []
+        if isinstance(configured, Mapping):
+            configured = [dict(value, channel_id=key)
+                          for key, value in configured.items()
+                          if isinstance(value, Mapping)]
+        result = []
+        for item in configured:
+            if not isinstance(item, Mapping) or not item.get("channel_id"):
+                continue
+            result.append({
+                "channel_id": str(item.get("channel_id")),
+                "source_type": str(item.get("source_type") or ""),
+                "ros_topic": str(item.get("ros_topic") or ""),
+                "fps": item.get("fps", 0),
+            })
+        return result
+
+    def _register_media_state(self):
+        if not self.state_reporting:
+            return
+        self.register_state("media_active_protocol", "string", persistent=False)
+        self.register_state("media_channel_count", "int", persistent=False)
+        self.register_state("media_camera_list", "json", persistent=False)
+
+    def _publish_media_state(self):
+        if not self.state_reporting:
+            return
+        active = self.manager.snapshot()
+        protocols = [str(item.get("protocol") or "") for item in active.values()]
+        protocol = "webrtc" if "webrtc" in protocols else ("rtsp" if "rtsp" in protocols else "none")
+        self.set_state("media_active_protocol", protocol, persistent=False)
+        self.set_state("media_channel_count", len(active), persistent=False)
+        self.set_state("media_camera_list", self.channel_metadata, persistent=False)
 
     def _configure_ros2(self, config: Mapping[str, Any]):
         try:
@@ -154,12 +195,14 @@ class MediaWorker(Worker):
             result = self.manager.stop(channel)
         else:
             result = {"success": False, "code": "E_UNSUPPORTED_MEDIA_ACTION"}
+        self._publish_media_state()
         return {"status": "succeeded" if result.get("success") else "failed",
                 "operation_id": request["operation_id"], "payload": result}
 
     def deactivate(self) -> None:
         for channel_id in list(self.manager.channels):
             self.manager.stop(channel_id)
+        self._publish_media_state()
 
     def shutdown(self) -> None:
         for item in reversed(self._closables):

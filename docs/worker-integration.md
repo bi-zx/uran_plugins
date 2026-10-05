@@ -29,3 +29,8 @@ It accepts `arm_joints`, Cartesian `arm_pose` (damped least-squares IK), and
 are separate inputs. Torque is disabled by default, and the calibration tool
 is available as `uran-so101-calibrate probe`, `record-center`, and
 `record-limits`.
+
+The media worker also restores the legacy state fields `media_camera_list`,
+`media_channel_count`, and `media_active_protocol`. The first lists every
+configured channel, while the latter two describe currently active sessions;
+these are existing fields and do not add keys to the MQTT state message.

@@ -10,7 +10,7 @@ from uran_media_plugin.webrtc_channel import WebRTCChannel
 def test_inline_media_config_is_loaded_with_explicit_backend_override():
     from uran_media_plugin.worker import MediaWorker
     worker = MediaWorker()
-    worker.configure({"simulation": True, "webrtc": {
+    worker.configure({"simulation": True, "state_reporting": False, "webrtc": {
         "implementation": "cyberdog2", "stun_server": "stun:example.test:3478",
         "turn_servers": [{"url": "turn:example.test:3478", "username": "test", "credential": "secret"}]}})
     assert worker._defaults["webrtc"]["stun_server"] == "stun:example.test:3478"
@@ -22,6 +22,24 @@ def test_missing_backend_is_an_explicit_failure():
     result = MediaManager({}).start(channel_id="front", protocol="webrtc", config={})
     assert result["success"] is False
     assert result["code"] == "E_BACKEND_UNAVAILABLE"
+
+
+def test_legacy_media_channel_state_contains_configured_channels():
+    from uran_media_plugin.worker import MediaWorker
+    worker = MediaWorker()
+    registered = []
+    published = {}
+    worker.register_state = lambda field, value_type="any", unit="", persistent=False: registered.append((field, value_type))
+    worker.set_state = lambda field, value, persistent=False: published.update({field: value})
+    worker.configure({"simulation": True, "channel_metadata": {
+        "front_cam": {"source_type": "ros_topic", "ros_topic": "/camera/image_raw", "fps": 30},
+        "cyberdog_main": {"source_type": "camera_service", "ros_topic": "image", "fps": 10},
+    }})
+    assert {item[0] for item in registered} == {
+        "media_active_protocol", "media_channel_count", "media_camera_list"}
+    assert published["media_active_protocol"] == "none"
+    assert published["media_channel_count"] == 0
+    assert [item["channel_id"] for item in published["media_camera_list"]] == ["front_cam", "cyberdog_main"]
 
 
 def test_simulation_backend_is_identified_as_simulation():
