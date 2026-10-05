@@ -42,6 +42,29 @@ def test_legacy_media_channel_state_contains_configured_channels():
     assert [item["channel_id"] for item in published["media_camera_list"]] == ["front_cam", "cyberdog_main"]
 
 
+def test_start_with_offer_forwards_signal_after_channel_registration():
+    import time
+    from uran_media_plugin.worker import MediaWorker
+    worker = MediaWorker()
+    worker.identity = {"device_id": "dog", "component_id": "media"}
+    worker.configure({"simulation": True, "state_reporting": False})
+    now = time.time_ns()
+    result = worker.invoke({
+        "message_type": "uran.media.session-command.v1",
+        "operation_id": "op-1",
+        "payload": {
+            "schema_version": "1.0", "operation_id": "op-1",
+            "target": {"device_id": "dog", "component_id": "media"},
+            "session_id": "cyberdog_main", "channel_id": "cyberdog_main",
+            "action": "start", "protocol": "webrtc", "timestamp_ns": now,
+            "signal": {"type": "offer", "sdp": "v=0"},
+        },
+    })
+    assert result["status"] == "succeeded"
+    assert result["payload"]["signal"]["success"] is True
+    assert result["payload"]["signal"]["reply"]["signal"]["type"] == "offer"
+
+
 def test_simulation_backend_is_identified_as_simulation():
     manager = MediaManager({"webrtc": MemoryMediaBackend()})
     result = manager.start(channel_id="front", protocol="webrtc", config={})

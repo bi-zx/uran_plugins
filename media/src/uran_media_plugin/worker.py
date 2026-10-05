@@ -151,10 +151,10 @@ class MediaWorker(Worker):
             raise ValueError(f"unsupported camera source: {source_type}")
 
         def outgoing_signal(channel_id, signal):
-            target = {"device_id": str(self.identity.get("device_id") or camera_cfg.get("device_id") or "device"),
-                      "component_id": str(self.identity.get("component_id") or "camera")}
-            self.publish_uplink({"message_type": "uran.media.signal.v1", "payload": {
-                "schema_version": "1.0", "target": target,
+            # Keep the legacy cloud boundary used by uran_ws.  MQTT encodes
+            # message_type as data_type, so media_signal must remain the
+            # externally visible type and its payload must stay two fields.
+            self.publish_uplink({"message_type": "media_signal", "payload": {
                 "channel_id": channel_id, "signal": signal,
             }, "correlation_id": channel_id})
 
@@ -194,8 +194,27 @@ class MediaWorker(Worker):
             result = self.manager.start(channel_id=channel,
                                         protocol=str(command.get("protocol", "")),
                                         config=dict(self._defaults.get(str(command.get("protocol"))) or {}))
+            if result.get("success") and signal:
+                signal_result = self.manager.signal(channel_id=channel, signal=signal)
+                if signal_result.get("success"):
+                    result = dict(result)
+                    result["signal"] = signal_result
+                else:
+                    result = signal_result
         elif action == "switch" and signal:
-            result = self.manager.signal(channel_id=channel, signal=signal)
+            if channel not in self.manager.channels:
+                result = self.manager.start(channel_id=channel,
+                                            protocol=str(command.get("protocol", "")),
+                                            config=dict(self._defaults.get(str(command.get("protocol"))) or {}))
+                if result.get("success"):
+                    signal_result = self.manager.signal(channel_id=channel, signal=signal)
+                    if signal_result.get("success"):
+                        result = dict(result)
+                        result["signal"] = signal_result
+                    else:
+                        result = signal_result
+            else:
+                result = self.manager.signal(channel_id=channel, signal=signal)
         elif action == "switch":
             self.manager.stop(channel)
             result = self.manager.start(channel_id=channel,
