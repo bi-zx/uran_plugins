@@ -47,7 +47,7 @@ def test_cyberdog_worker_executes_typed_simulation_motion():
 
 
 def test_media_worker_requires_explicit_simulator_or_real_backend():
-    replies = _run(media_factory, _lifecycle({}, {
+    replies = _run(media_factory, _lifecycle({"state_reporting": False}, {
         "message_type": "uran.media.session-command.v1",
         "payload": {"schema_version": "1.0", "operation_id": "op-1",
                     "target": {"device_id": "dog", "component_id": "camera"},

@@ -88,9 +88,15 @@ class MediaWorker(Worker):
     def _register_media_state(self):
         if not self.state_reporting:
             return
-        self.register_state("media_active_protocol", "string", persistent=False)
-        self.register_state("media_channel_count", "int", persistent=False)
-        self.register_state("media_camera_list", "json", persistent=False)
+        for field, value_type in (("media_active_protocol", "string"),
+                                   ("media_channel_count", "int"),
+                                   ("media_camera_list", "json")):
+            try:
+                self.register_state(field, value_type, persistent=False)
+            except RuntimeError:
+                # Standalone SDK tests can configure a worker before binding
+                # it to WorkerServer; the Runtime host registers these fields.
+                pass
 
     def _publish_media_state(self):
         if not self.state_reporting:
@@ -98,9 +104,13 @@ class MediaWorker(Worker):
         active = self.manager.snapshot()
         protocols = [str(item.get("protocol") or "") for item in active.values()]
         protocol = "webrtc" if "webrtc" in protocols else ("rtsp" if "rtsp" in protocols else "none")
-        self.set_state("media_active_protocol", protocol, persistent=False)
-        self.set_state("media_channel_count", len(active), persistent=False)
-        self.set_state("media_camera_list", self.channel_metadata, persistent=False)
+        for field, value in (("media_active_protocol", protocol),
+                             ("media_channel_count", len(active)),
+                             ("media_camera_list", self.channel_metadata)):
+            try:
+                self.set_state(field, value, persistent=False)
+            except RuntimeError:
+                pass
 
     def _configure_ros2(self, config: Mapping[str, Any]):
         try:
