@@ -55,14 +55,17 @@ class CyberDog2CameraAdapter:
             self._node.get_logger().info(
                 '[CyberDog2Camera] Skipping activation (protocol not available)'
             )
-            return False
+            # image_transmission owns the CyberDog2 camera lifecycle in bridge
+            # mode.  The media channel must still be registered so signaling
+            # can reach that node when the service is absent from this worker.
+            return True
 
         if not self._client.wait_for_service(timeout_sec=3.0):
             self._node.get_logger().warning(
                 f'[CyberDog2Camera] Service {self._service_name} not available, '
                 'will try to subscribe topic directly'
             )
-            return False
+            return True
 
         result = self._call_service(CMD_START_IMAGE_PUBLISH)
         if result and result.result == RESULT_SUCCESS:
@@ -74,7 +77,7 @@ class CyberDog2CameraAdapter:
                 f'[CyberDog2Camera] START_IMAGE_PUBLISH result={code} '
                 '(camera may already be active via image_transmission), proceeding anyway'
             )
-            return False
+            return True
 
     def deactivate(self):
         """停止摄像头图像发布。"""

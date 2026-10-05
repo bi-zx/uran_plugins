@@ -77,3 +77,24 @@ def test_missing_aiortc_never_returns_empty_sdp_success(monkeypatch):
     channel = WebRTCChannel("front", "stun:example.invalid", lambda *_: None)
     with pytest.raises(RuntimeError, match="not installed"):
         asyncio.run(channel.start())
+
+
+def test_cyberdog_camera_activation_keeps_bridge_channel_when_service_is_unavailable():
+    from uran_media_plugin.cyberdog2_camera import CyberDog2CameraAdapter
+
+    class Logger:
+        def info(self, message):
+            pass
+
+        def warning(self, message):
+            pass
+
+    class Node:
+        def get_logger(self):
+            return Logger()
+
+    adapter = object.__new__(CyberDog2CameraAdapter)
+    adapter._node = Node()
+    adapter._available = False
+    adapter._client = None
+    assert adapter.activate() is True
