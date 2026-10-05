@@ -30,6 +30,10 @@ class MqttWorker(Worker):
         self.transport_enabled = bool(config.get("transport_enabled", False))
         self.default_device_id = str(config.get("device_id") or self.identity.get("device_id") or "")
         self.default_component_id = str(config.get("default_component_id") or "base")
+        # Legacy media_ctrl packets did not carry component_id.  Keep motion
+        # commands on the normal default component while routing those media
+        # packets to the configured media worker internally.
+        self.media_component_id = str(config.get("media_component_id") or "media")
         self.validity_window_ns = int(float(config.get("command_validity_s", 1.0)) * 1_000_000_000)
         self.recovery_delay_s = max(0.0, float(config.get("reconnect_recovery_delay_s", 2.0)))
         self.heartbeat_interval_s = max(0.1, float(config.get("heartbeat_interval_s", 30.0)))
@@ -54,12 +58,15 @@ class MqttWorker(Worker):
         received_at_ns = now_ns()
         operation_id = str(payload.get("operation_id") or payload.get("request_id") or
                            f"mqtt-{received_at_ns}-{sequence}")
+        default_component_id = str(payload.get("component_id") or self.default_component_id)
+        if payload.get("msg_type") == "media_ctrl" and not payload.get("component_id"):
+            default_component_id = self.media_component_id
         message = self.codec.decode_public(
             payload,
             operation_id=operation_id,
             sequence=int(payload.get("sequence") or sequence),
             default_device_id=self.default_device_id,
-            default_component_id=str(payload.get("component_id") or self.default_component_id),
+            default_component_id=default_component_id,
             validity_window_ns=self.validity_window_ns,
             received_at_ns=received_at_ns,
         )
