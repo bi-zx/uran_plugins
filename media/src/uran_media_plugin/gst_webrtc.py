@@ -67,10 +67,12 @@ class GstWebRtcBackend:
                     "transport": "gstreamer-webrtc", "simulated": False}
 
     def _set_offer(self, item, channel_id, text):
-        result, message = self.GstSdp.sdp_message_new_from_text(str(text))
+        result, message = self.GstSdp.sdp_message_new()
+        result = self.GstSdp.sdp_message_parse_buffer(
+            str(text).encode("utf-8"), message)
         if result != self.GstSdp.SDPResult.OK:
             raise ValueError("invalid SDP offer")
-        offer = self.GstWebRTC.WebRTCSessionDescription(
+        offer = self.GstWebRTC.WebRTCSessionDescription.new(
             self.GstWebRTC.WebRTCSDPType.OFFER, message)
         item["webrtc"].emit("set-remote-description", offer, None)
         promise = self.Gst.Promise.new_with_change_func(self._answer_ready,
