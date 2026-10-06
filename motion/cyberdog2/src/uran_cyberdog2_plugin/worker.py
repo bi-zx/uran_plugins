@@ -66,6 +66,8 @@ class CyberDogWorker(Worker):
         self.parameter_fields = {"linear_vel_limit": "linear_limit", "angular_vel_limit": "angular_limit"}
         self.persistent_parameters = bool(config.get("persistent_parameters", False))
         self.state_reporting = bool(config.get("state_reporting", True))
+        self.battery_field = str(config.get("battery_field") or "battery_level")
+        self._last_battery = None
         self.controller.control_mode = str(config.get("control_mode", "manual"))
         if self.connection_field:
             self.controller.heartbeat(False)
@@ -80,6 +82,7 @@ class CyberDogWorker(Worker):
                     raise ValueError(f"invalid persisted parameter: {key}")
                 setattr(self.controller, attribute, float(restored))
                 self.set_state(key, float(restored), persistent=self.persistent_parameters)
+            self.register_state(self.battery_field, "double", persistent=False)
         self.stop_event.clear()
         self.tick_thread = threading.Thread(target=self._tick_loop, daemon=True)
         self.tick_thread.start()
@@ -88,6 +91,14 @@ class CyberDogWorker(Worker):
         while not self.stop_event.wait(0.05):
             with self.lock:
                 self.controller.tick()
+                if self.state_reporting:
+                    backend_state = self.controller.backend.state()
+                    battery = backend_state.get("battery_level")
+                    if isinstance(battery, (int, float)) and math.isfinite(float(battery)):
+                        battery = float(battery)
+                        if self._last_battery != battery:
+                            self.set_state(self.battery_field, battery, persistent=False)
+                            self._last_battery = battery
 
     def on_state(self, subscription_id, field, value, sequence):
         item = value.get("value")
