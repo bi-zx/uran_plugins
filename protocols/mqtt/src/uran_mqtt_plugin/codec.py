@@ -129,11 +129,15 @@ class CloudCodec:
                 raise DecodeError("switch must be an object")
             body["switch"] = dict(switch)
         elif message_type == "media_ctrl":
+            # Existing clients use signal_json, while newer cloud paths may
+            # carry the same object directly as signal.  Accept both forms
+            # at the protocol boundary without changing the wire schema.
+            signal_value = payload.get("signal_json", payload.get("signal", {}))
             body.update({
                 "action": self._text(payload, "action"),
                 "protocol": self._text(payload, "protocol"),
                 "channel_id": self._text(payload, "channel_id"),
-                "signal": self._json_value(payload.get("signal_json", {})),
+                "signal": self._json_value(signal_value),
             })
         elif message_type == "state_query":
             fields = payload.get("field_names", [])

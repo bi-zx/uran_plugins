@@ -40,6 +40,16 @@ def test_timestamp_accepts_integral_json_number_and_exponent_form():
     assert decoded["payload"]["timestamp_ns"] == 1_791_302_932_204_183_552
 
 
+def test_media_signal_accepts_direct_signal_object():
+    decoded = CloudCodec().decode({
+        "msg_type": "media_ctrl", "action": "switch", "protocol": "webrtc",
+        "channel_id": "realsense_left",
+        "signal": {"type": "candidate", "sdpMLineIndex": 1,
+                    "sdpMid": "1", "candidate": "candidate:test"},
+    })
+    assert decoded["payload"]["signal"]["sdpMLineIndex"] == 1
+
+
 def test_uplink_keeps_legacy_payload_json_for_existing_cloud():
     encoded = CloudCodec.encode_uplink(
         device_id="dog-1", source="motion", data_type="move_result",
