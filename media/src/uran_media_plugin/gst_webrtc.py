@@ -75,9 +75,10 @@ class GstWebRtcBackend:
         offer = self.GstWebRTC.WebRTCSessionDescription.new(
             self.GstWebRTC.WebRTCSDPType.OFFER, message)
         item["webrtc"].emit("set-remote-description", offer, None)
-        promise = self.Gst.Promise.new_with_change_func(self._answer_ready,
-                                                         (item, channel_id), None)
+        promise = self.Gst.Promise.new()
         item["webrtc"].emit("create-answer", None, promise)
+        promise.wait()
+        self._answer_ready(promise, (item, channel_id))
 
     def _answer_ready(self, promise, user_data):
         item, channel_id = user_data
