@@ -227,6 +227,11 @@ class MediaWorker(Worker):
             result = self.manager.start(channel_id=channel,
                                         protocol=str(command.get("protocol", "")),
                                         config=dict(self._defaults.get(str(command.get("protocol"))) or {}))
+        elif signal:
+            # Legacy MQTT/WebSocket clients send SDP/ICE follow-up packets
+            # with action="" (the action belongs to the channel lifecycle).
+            # Route every signal packet to the already registered channel.
+            result = self.manager.signal(channel_id=channel, signal=signal)
         elif action == "stop":
             result = self.manager.stop(channel)
         else:
