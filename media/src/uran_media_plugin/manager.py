@@ -66,7 +66,7 @@ class AiortcMediaBackend:
             on_closed_cb=lambda closed: self.channels.pop(closed, None),
             turn_servers=list(merged.get("turn_servers") or []),
         )
-        offer = json.loads(self._run(channel.start()))
+        offer = json.loads(self._run(channel.start(generate_offer=False)))
         self.channels[channel_id] = channel
         return {"channel_id": channel_id, "offer": offer, "simulated": False}
 
@@ -75,7 +75,9 @@ class AiortcMediaBackend:
         if channel is None:
             raise KeyError(f"channel is not active: {channel_id}")
         signal_type = str(signal.get("type") or ("answer" if signal.get("sdp") else ""))
-        if signal_type == "answer":
+        if signal_type == "offer":
+            self._run(channel.set_offer(json.dumps(signal)))
+        elif signal_type == "answer":
             self._run(channel.set_answer(json.dumps({"type": "answer", "sdp": signal["sdp"]})))
         elif signal_type == "candidate":
             self._run(channel.add_ice_candidate(json.dumps(signal)))
@@ -83,8 +85,9 @@ class AiortcMediaBackend:
             raise ValueError(f"unsupported WebRTC signal: {signal_type or '<empty>'}")
         return {"channel_id": channel_id, "accepted": signal_type, "simulated": False}
 
-    def push_frame(self, frame) -> None:
-        for channel in list(self.channels.values()):
+    def push_frame(self, channel_id, frame) -> None:
+        channel = self.channels.get(channel_id)
+        if channel is not None:
             channel.push_frame(frame)
 
     def stop(self, channel_id: str) -> None:
@@ -204,7 +207,7 @@ class ChannelRoutingWebRtcBackend:
     def push_frame(self, channel_id, frame):
         push = getattr(self._backend(channel_id), "push_frame", None)
         if push:
-            push(frame)
+            push(channel_id, frame)
 
     def close(self):
         self.bridge.close()

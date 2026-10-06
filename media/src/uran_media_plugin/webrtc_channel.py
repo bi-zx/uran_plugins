@@ -8,6 +8,7 @@ import asyncio
 import json
 import queue
 import time
+from fractions import Fraction
 from typing import Callable, Optional
 
 try:
@@ -39,7 +40,7 @@ class _RosVideoTrack:
                         frame_data = self._queue.get_nowait()
                         frame = av.VideoFrame.from_ndarray(frame_data, format='bgr24')
                         frame.pts = self._pts
-                        frame.time_base = '1/90000'
+                        frame.time_base = Fraction(1, 90000)
                         self._pts += 3000  # ~30fps
                         return frame
                     except queue.Empty:
@@ -47,7 +48,7 @@ class _RosVideoTrack:
                             # 返回黑帧避免超时
                             frame = av.VideoFrame(width=640, height=480, format='bgr24')
                             frame.pts = self._pts
-                            frame.time_base = '1/90000'
+                            frame.time_base = Fraction(1, 90000)
                             self._pts += 3000
                             return frame
                         await asyncio.sleep(0.01)
@@ -73,7 +74,7 @@ class WebRTCChannel:
             import logging
             logging.getLogger(__name__).warning('aiortc is unavailable')
 
-    async def start(self) -> str:
+    async def start(self, generate_offer=True) -> str:
         """创建 PeerConnection，添加 VideoTrack，生成 SDP Offer，返回 offer JSON。"""
         if not self._available:
             raise RuntimeError('aiortc/av backend is not installed')
@@ -108,10 +109,22 @@ class WebRTCChannel:
                     'sdpMLineIndex': candidate.sdpMLineIndex,
                 })
 
+        if not generate_offer:
+            return '{}'
         offer = await self._pc.createOffer()
         await self._pc.setLocalDescription(offer)
 
         return json.dumps({
+            'type': self._pc.localDescription.type,
+            'sdp': self._pc.localDescription.sdp,
+        })
+
+    async def set_offer(self, offer_json: str):
+        data = json.loads(offer_json)
+        await self._pc.setRemoteDescription(RTCSessionDescription(sdp=data['sdp'], type='offer'))
+        answer = await self._pc.createAnswer()
+        await self._pc.setLocalDescription(answer)
+        self._on_signal_cb(self._channel_id, {
             'type': self._pc.localDescription.type,
             'sdp': self._pc.localDescription.sdp,
         })
@@ -138,11 +151,14 @@ class WebRTCChannel:
             raise RuntimeError('WebRTC channel is not started')
         try:
             data = json.loads(candidate_json)
-            candidate = RTCIceCandidate(
-                sdp=data.get('candidate', ''),
-                sdpMid=data.get('sdpMid'),
-                sdpMLineIndex=data.get('sdpMLineIndex'),
-            )
+            from aiortc.sdp import candidate_from_sdp
+            raw = data.get('candidate', '')
+            if not raw:
+                await self._pc.addIceCandidate(None)
+                return
+            candidate = candidate_from_sdp(raw.removeprefix('candidate:') if hasattr(raw, 'removeprefix') else raw.split('candidate:', 1)[-1])
+            candidate.sdpMid = data.get('sdpMid')
+            candidate.sdpMLineIndex = data.get('sdpMLineIndex')
             await self._pc.addIceCandidate(candidate)
         except Exception as e:
             import logging
