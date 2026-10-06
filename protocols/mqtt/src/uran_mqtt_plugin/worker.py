@@ -239,6 +239,7 @@ class MqttWorker(Worker):
             document = {"schema_version": "1.0", "components": [],
                         "unscoped_fields": dict(fields), "fields": fields}
         fields = dict(document.get("fields") or {})
+        battery_level = fields.pop("battery_level", None)
         # The Runtime document is authoritative.  Keep every component entry
         # belonging to this MQTT worker's device so every component ID on the
         # device is visible without leaking another device's state.
@@ -246,7 +247,6 @@ class MqttWorker(Worker):
                       if isinstance(item, Mapping) and
                       (not item.get("device_id") or
                        str(item.get("device_id")) == self.default_device_id)]
-        battery_level = fields.get("battery_level")
         if isinstance(battery_level, (int, float)) and not isinstance(battery_level, bool):
             # Battery is device-wide, but expose it in every component entry
             # so consumers that parse components independently can display it.
