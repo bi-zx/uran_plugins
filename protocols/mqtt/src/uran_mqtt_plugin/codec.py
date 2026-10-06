@@ -52,11 +52,28 @@ class CloudCodec:
                         raise ValueError("boolean")
                     if isinstance(value, int):
                         parsed = value
+                    elif isinstance(value, float):
+                        # JavaScript clients commonly serialize large integer
+                        # timestamps as JSON numbers (and some serializers use
+                        # exponent notation).  Preserve them when they are
+                        # finite integral values; fractional timestamps remain
+                        # invalid.
+                        if not math.isfinite(value) or not value.is_integer():
+                            raise ValueError("not an integer")
+                        parsed = int(value)
                     elif isinstance(value, str):
                         text = value.strip()
-                        if not text or any(char not in "+-0123456789" for char in text):
+                        if not text:
                             raise ValueError("not an integer")
-                        parsed = int(text, 10)
+                        try:
+                            parsed = int(text, 10)
+                        except ValueError:
+                            # Accept exponent/decimal spellings only when the
+                            # represented value is an exact integer.
+                            numeric = float(text)
+                            if not math.isfinite(numeric) or not numeric.is_integer():
+                                raise ValueError("not an integer")
+                            parsed = int(numeric)
                     else:
                         raise ValueError("not an integer")
                     if parsed < 0:

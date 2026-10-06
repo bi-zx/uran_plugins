@@ -32,6 +32,14 @@ def test_nanosecond_timestamp_keeps_integer_precision():
         CloudCodec().decode({"msg_type": "state_query", "timestamp_ns": "1.5"})
 
 
+def test_timestamp_accepts_integral_json_number_and_exponent_form():
+    value = 1_791_302_932_204_183_552
+    decoded = CloudCodec().decode({"msg_type": "state_query", "timestamp_ns": float(value)})
+    assert decoded["payload"]["timestamp_ns"] == int(float(value))
+    decoded = CloudCodec().decode({"msg_type": "state_query", "timestamp_ns": "1.7913029322041836e18"})
+    assert decoded["payload"]["timestamp_ns"] == 1_791_302_932_204_183_552
+
+
 def test_uplink_keeps_legacy_payload_json_for_existing_cloud():
     encoded = CloudCodec.encode_uplink(
         device_id="dog-1", source="motion", data_type="move_result",
