@@ -9,6 +9,7 @@ from .manager import (
     AiortcMediaBackend,
     ChannelRoutingWebRtcBackend,
     CyberDogWebRtcBackend,
+    GstWebRtcBackend,
     MediaManager,
     MemoryMediaBackend,
     RtspMediaBackend,
@@ -169,9 +170,11 @@ class MediaWorker(Worker):
         webrtc_cfg = dict(config.get("webrtc") or {})
         if str(webrtc_cfg.get("implementation") or "aiortc") == "cyberdog2":
             bridge_backend = CyberDogWebRtcBackend(node, webrtc_cfg, outgoing_signal)
-            aiortc_backend = AiortcMediaBackend(webrtc_cfg, outgoing_signal)
+            gst_config = dict(webrtc_cfg)
+            gst_config.setdefault("stun_server", webrtc_cfg.get("stun_server"))
+            local_backend = GstWebRtcBackend(gst_config, outgoing_signal)
             sources = {item["channel_id"]: item for item in self.channel_metadata}
-            webrtc = ChannelRoutingWebRtcBackend(bridge_backend, aiortc_backend, sources)
+            webrtc = ChannelRoutingWebRtcBackend(bridge_backend, local_backend, sources)
         else:
             webrtc = AiortcMediaBackend(webrtc_cfg, outgoing_signal)
         rtsp = RtspMediaBackend(dict(config.get("rtsp") or {}))
@@ -246,10 +249,16 @@ class MediaWorker(Worker):
         channel = str(command.get("channel_id") or command.get("session_id") or "")
         action = command.get("action")
         signal = dict(command.get("signal") or {})
+        channel_config = dict(self._defaults.get(str(command.get("protocol"))) or {})
+        profile = next((item for item in self.channel_metadata
+                        if item.get("channel_id") == channel), {})
+        for key in ("width", "height", "fps"):
+            if profile.get(key) is not None:
+                channel_config[key] = profile[key]
         if action == "start":
             result = self.manager.start(channel_id=channel,
                                         protocol=str(command.get("protocol", "")),
-                                        config=dict(self._defaults.get(str(command.get("protocol"))) or {}))
+                                        config=channel_config)
             if result.get("success") and signal:
                 signal_result = self.manager.signal(channel_id=channel, signal=signal)
                 if signal_result.get("success"):
@@ -261,7 +270,7 @@ class MediaWorker(Worker):
             if channel not in self.manager.channels:
                 result = self.manager.start(channel_id=channel,
                                             protocol=str(command.get("protocol", "")),
-                                            config=dict(self._defaults.get(str(command.get("protocol"))) or {}))
+                                            config=channel_config)
                 if result.get("success"):
                     signal_result = self.manager.signal(channel_id=channel, signal=signal)
                     if signal_result.get("success"):
@@ -275,7 +284,7 @@ class MediaWorker(Worker):
             self.manager.stop(channel)
             result = self.manager.start(channel_id=channel,
                                         protocol=str(command.get("protocol", "")),
-                                        config=dict(self._defaults.get(str(command.get("protocol"))) or {}))
+                                        config=channel_config)
         elif signal:
             # Legacy MQTT/WebSocket clients send SDP/ICE follow-up packets
             # with action="" (the action belongs to the channel lifecycle).

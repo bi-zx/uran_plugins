@@ -13,6 +13,7 @@ except ImportError:  # Python 3.6
 from .cyberdog2_webrtc_bridge import from_img_trans, make_stop, to_img_trans
 from .rtsp_server import RTSPServer
 from .webrtc_channel import WebRTCChannel
+from .gst_webrtc import GstWebRtcBackend
 
 
 class MediaBackend(Protocol):
@@ -186,14 +187,14 @@ class ChannelRoutingWebRtcBackend:
     """Route the main camera through image_transmission and other sources
     through the local aiortc backend."""
 
-    def __init__(self, bridge, aiortc, channel_sources):
+    def __init__(self, bridge, local, channel_sources):
         self.bridge = bridge
-        self.aiortc = aiortc
+        self.local = local
         self.channel_sources = dict(channel_sources)
 
     def _backend(self, channel_id):
         source_type = str(self.channel_sources.get(channel_id, {}).get("source_type") or "")
-        return self.bridge if source_type == "camera_service" else self.aiortc
+        return self.bridge if source_type == "camera_service" else self.local
 
     def start(self, channel_id, config):
         return self._backend(channel_id).start(channel_id, config)
@@ -211,7 +212,7 @@ class ChannelRoutingWebRtcBackend:
 
     def close(self):
         self.bridge.close()
-        self.aiortc.close()
+        self.local.close()
 
 
 class SourceManagedBackend:
