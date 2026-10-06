@@ -260,9 +260,21 @@ class MqttWorker(Worker):
         while not self._heartbeat_stop.wait(self.heartbeat_interval_s):
             if not self.client or not self.client.is_connected():
                 continue
+            # Keep the legacy top-level heartbeat field.  The original
+            # uran_ws core exposed battery_level here, while the canonical
+            # state_snapshot exposes it under fields.battery_level.
+            battery_level = 0.0
+            try:
+                snapshot = dict(self.runtime_snapshot())
+                value = (snapshot.get("fields") or {}).get("battery_level")
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    battery_level = float(value)
+            except Exception:
+                pass
             self._publish_legacy({
                 "msg_type": "heartbeat", "msg_version": "1.0",
                 "device_id": self.default_device_id, "timestamp_ns": now_ns(),
+                "battery_level": battery_level,
             })
             self._publish_state_snapshot(reason="periodic")
 
