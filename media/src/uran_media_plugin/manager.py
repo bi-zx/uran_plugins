@@ -275,6 +275,16 @@ class MediaManager:
         if backend is None:
             return {"success": False, "code": "E_BACKEND_UNAVAILABLE",
                     "message": f"{protocol} backend is not installed"}
+        # A failed browser ICE negotiation does not necessarily produce a
+        # close callback.  Treat a repeated start as a session replacement so
+        # clients can retry without having to guess whether a stale channel
+        # survived on the device.
+        previous = self.channels.pop(channel_id, None)
+        if previous is not None:
+            try:
+                self.backends[previous.protocol].stop(channel_id)
+            except Exception:
+                pass
         try:
             state = backend.start(channel_id, config)
         except Exception as exc:

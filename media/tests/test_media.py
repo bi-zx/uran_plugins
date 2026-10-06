@@ -72,6 +72,14 @@ def test_simulation_backend_is_identified_as_simulation():
     assert result["backend"]["simulated"] is True
 
 
+def test_repeated_start_replaces_stale_channel():
+    backend = MemoryMediaBackend()
+    manager = MediaManager({"webrtc": backend})
+    assert manager.start(channel_id="front", protocol="webrtc", config={})["success"]
+    assert manager.start(channel_id="front", protocol="webrtc", config={})["success"]
+    assert list(manager.channels) == ["front"]
+
+
 def test_missing_aiortc_never_returns_empty_sdp_success(monkeypatch):
     monkeypatch.setattr(webrtc_channel, "_AIORTC_AVAILABLE", False)
     channel = WebRTCChannel("front", "stun:example.invalid", lambda *_: None)
