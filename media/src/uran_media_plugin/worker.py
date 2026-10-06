@@ -132,11 +132,18 @@ class MediaWorker(Worker):
         camera_cfg = dict(config.get("camera") or {})
         source_type = str(camera_cfg.get("type") or "none")
         if source_type == "cyberdog2":
-            adapter = CyberDog2CameraAdapter(
-                node, str(camera_cfg.get("service_name") or "camera_service"),
-                int(camera_cfg.get("width", 640)), int(camera_cfg.get("height", 480)),
-                int(camera_cfg.get("fps", 30)))
-            source = _CameraSource(adapter)
+            # The image_transmission bridge owns the CyberDog2 camera lifecycle
+            # for WebRTC.  Its START_LIVE_STREAM transition happens after ICE
+            # succeeds; calling START_IMAGE_PUBLISH here puts camera_server in
+            # the wrong state and prevents video frames from being produced.
+            if bool(camera_cfg.get("activate_service", False)):
+                adapter = CyberDog2CameraAdapter(
+                    node, str(camera_cfg.get("service_name") or "camera_service"),
+                    int(camera_cfg.get("width", 640)), int(camera_cfg.get("height", 480)),
+                    int(camera_cfg.get("fps", 30)))
+                source = _CameraSource(adapter)
+            else:
+                source = _AlwaysReadySource()
         elif source_type == "realsense":
             adapter = RealSenseLifecycleAdapter(
                 node, str(camera_cfg.get("lifecycle_node_name") or "/camera/camera"),
