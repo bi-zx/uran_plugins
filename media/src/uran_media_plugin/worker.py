@@ -7,6 +7,7 @@ from uran_interfaces import ContractValidator
 from .cyberdog2_camera import CyberDog2CameraAdapter
 from .manager import (
     AiortcMediaBackend,
+    ChannelRoutingWebRtcBackend,
     CyberDogWebRtcBackend,
     MediaManager,
     MemoryMediaBackend,
@@ -167,22 +168,70 @@ class MediaWorker(Worker):
 
         webrtc_cfg = dict(config.get("webrtc") or {})
         if str(webrtc_cfg.get("implementation") or "aiortc") == "cyberdog2":
-            webrtc = CyberDogWebRtcBackend(node, webrtc_cfg, outgoing_signal)
+            bridge_backend = CyberDogWebRtcBackend(node, webrtc_cfg, outgoing_signal)
+            aiortc_backend = AiortcMediaBackend(webrtc_cfg, outgoing_signal)
+            sources = {item["channel_id"]: item for item in self.channel_metadata}
+            webrtc = ChannelRoutingWebRtcBackend(bridge_backend, aiortc_backend, sources)
         else:
             webrtc = AiortcMediaBackend(webrtc_cfg, outgoing_signal)
         rtsp = RtspMediaBackend(dict(config.get("rtsp") or {}))
         self._closables.extend((webrtc, rtsp))
 
         bridge = CvBridge()
-        def on_image(message):
-            frame = bridge.imgmsg_to_cv2(message, desired_encoding="bgr8")
-            push = getattr(webrtc, "push_frame", None)
-            if push:
-                push(frame)
-            rtsp.push_frame(frame)
-        self._image_subscription = node.create_subscription(
-            Image, str(camera_cfg.get("image_topic") or "/camera/color/image_raw"),
-            on_image, 10)
+        namespace = str(camera_cfg.get("namespace") or config.get("namespace") or "").rstrip("/")
+
+        def resolve_topic(topic):
+            topic = str(topic or "")
+            if namespace and topic != namespace and not topic.startswith(namespace + "/"):
+                return namespace + (topic if topic.startswith("/") else "/" + topic)
+            return topic
+
+        topic_channels = {}
+        for item in self.channel_metadata:
+            if item.get("source_type") == "camera_service":
+                continue
+            topic = resolve_topic(item.get("ros_topic"))
+            if topic:
+                topic_channels.setdefault(topic, []).append(item["channel_id"])
+        if not topic_channels:
+            topic = resolve_topic(camera_cfg.get("image_topic") or "/camera/color/image_raw")
+            if topic:
+                topic_channels[topic] = []
+
+        def convert_image(message):
+            import numpy as np
+            try:
+                frame = bridge.imgmsg_to_cv2(message, desired_encoding="passthrough")
+            except Exception:
+                frame = bridge.imgmsg_to_cv2(message, desired_encoding="bgr8")
+            frame = np.asarray(frame)
+            if frame.ndim == 2:
+                if frame.dtype != np.uint8:
+                    values = frame[np.isfinite(frame)] if np.issubdtype(frame.dtype, np.floating) else frame
+                    high = float(values.max()) if values.size else 1.0
+                    low = float(values.min()) if values.size else 0.0
+                    frame = (np.zeros(frame.shape, dtype=np.uint8) if high <= low else
+                             ((frame.astype(np.float32) - low) * 255.0 / (high - low)).clip(0, 255).astype(np.uint8))
+                frame = np.repeat(frame[:, :, None], 3, axis=2)
+            elif frame.ndim == 3 and frame.shape[2] == 4:
+                frame = frame[:, :, :3]
+            return np.ascontiguousarray(frame, dtype=np.uint8)
+
+        self._image_subscriptions = []
+        for topic, channel_ids in topic_channels.items():
+            def on_image(message, ids=tuple(channel_ids), source_topic=topic):
+                try:
+                    frame = convert_image(message)
+                except Exception as exc:
+                    node.get_logger().warning(f"image conversion failed on {source_topic}: {exc}")
+                    return
+                targets = ids or tuple(self.manager.channels.keys())
+                for channel_id in targets:
+                    push = getattr(webrtc, "push_frame", None)
+                    if push:
+                        push(channel_id, frame)
+                    rtsp.push_frame(frame, channel_id=channel_id)
+            self._image_subscriptions.append(node.create_subscription(Image, topic, on_image, 10))
         return {"webrtc": SourceManagedBackend(webrtc, source),
                 "rtsp": SourceManagedBackend(rtsp, source)}
 

@@ -118,9 +118,11 @@ class RtspMediaBackend:
     def signal(self, channel_id: str, signal: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("RTSP does not accept WebRTC signaling")
 
-    def push_frame(self, frame) -> None:
-        for channel_id in list(self.server._channels):
-            self.server.push_frame(channel_id, frame)
+    def push_frame(self, frame, channel_id=None) -> None:
+        channels = [channel_id] if channel_id else list(self.server._channels)
+        for current in channels:
+            if current in self.server._channels:
+                self.server.push_frame(current, frame)
 
     def stop(self, channel_id: str) -> None:
         self.server.stop(channel_id)
@@ -175,6 +177,38 @@ class CyberDogWebRtcBackend:
     def close(self) -> None:
         for channel_id in list(self.channels):
             self.stop(channel_id)
+
+
+class ChannelRoutingWebRtcBackend:
+    """Route the main camera through image_transmission and other sources
+    through the local aiortc backend."""
+
+    def __init__(self, bridge, aiortc, channel_sources):
+        self.bridge = bridge
+        self.aiortc = aiortc
+        self.channel_sources = dict(channel_sources)
+
+    def _backend(self, channel_id):
+        source_type = str(self.channel_sources.get(channel_id, {}).get("source_type") or "")
+        return self.bridge if source_type == "camera_service" else self.aiortc
+
+    def start(self, channel_id, config):
+        return self._backend(channel_id).start(channel_id, config)
+
+    def signal(self, channel_id, signal):
+        return self._backend(channel_id).signal(channel_id, signal)
+
+    def stop(self, channel_id):
+        self._backend(channel_id).stop(channel_id)
+
+    def push_frame(self, channel_id, frame):
+        push = getattr(self._backend(channel_id), "push_frame", None)
+        if push:
+            push(frame)
+
+    def close(self):
+        self.bridge.close()
+        self.aiortc.close()
 
 
 class SourceManagedBackend:
