@@ -40,6 +40,17 @@ class GstWebRtcBackend:
             webrtc = pipeline.get_by_name("webrtc")
             if cfg.get("stun_server"):
                 webrtc.set_property("stun-server", str(cfg["stun_server"]))
+            turns = list(cfg.get("turn_servers") or [])
+            if turns and turns[0].get("url") and "your-turn-server" not in str(turns[0]["url"]):
+                turn = turns[0]
+                url = str(turn["url"])
+                if url.startswith("turn:"):
+                    url = "turn://" + url[len("turn:"):]
+                if turn.get("username"):
+                    scheme, rest = url.split("://", 1)
+                    url = "%s://%s:%s@%s" % (scheme, turn["username"],
+                                               turn.get("credential", ""), rest)
+                webrtc.set_property("turn-server", url)
             webrtc.connect("on-ice-candidate", self._on_ice, channel_id)
             pipeline.set_state(self.Gst.State.PLAYING)
             self.channels[channel_id] = {"pipeline": pipeline, "src": src,
@@ -88,8 +99,11 @@ class GstWebRtcBackend:
         self.on_signal(channel_id, {"type": "answer", "sdp": answer.sdp.as_text()})
 
     def _on_ice(self, _element, mline, candidate, channel_id):
+        # GStreamer reports the media-line index; browsers require the
+        # corresponding sdpMid as well.  They are not always both "0" when
+        # the remote offer contains an audio section.
         self.on_signal(channel_id, {"type": "candidate", "sdpMLineIndex": int(mline),
-                                    "sdpMid": "0", "candidate": str(candidate)})
+                                    "sdpMid": str(mline), "candidate": str(candidate)})
 
     def push_frame(self, channel_id, frame):
         with self.lock:
