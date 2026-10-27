@@ -35,8 +35,8 @@ class WaypointDispatcher:
             return {
                 'success': False,
                 'error_code': 'E_NAV_BACKEND_UNAVAILABLE',
-                'description': 'cyberdog navigation backend is unavailable',
-                'suggested_action': 'source_cyberdog_workspace',
+                'description': 'navigation backend is unavailable',
+                'suggested_action': 'configure_navigation_backend',
             }
 
         pose = self._projector.waypoint_to_pose(
@@ -52,7 +52,7 @@ class WaypointDispatcher:
             return {
                 'success': False,
                 'error_code': 'E_MOVE_FAIL',
-                'description': 'failed to dispatch waypoint to algorithm_manager',
+                'description': 'failed to dispatch waypoint to navigation backend',
                 'suggested_action': 'check_navigation_backend',
             }
 
@@ -75,8 +75,8 @@ class WaypointDispatcher:
             return {
                 'success': False,
                 'error_code': 'E_NAV_BACKEND_UNAVAILABLE',
-                'description': 'cyberdog navigation backend is unavailable',
-                'suggested_action': 'source_cyberdog_workspace',
+                'description': 'navigation backend is unavailable',
+                'suggested_action': 'configure_navigation_backend',
             }
 
         pose = {
@@ -96,7 +96,7 @@ class WaypointDispatcher:
             return {
                 'success': False,
                 'error_code': 'E_MOVE_FAIL',
-                'description': 'failed to dispatch map goal to algorithm_manager',
+                'description': 'failed to dispatch map goal to navigation backend',
                 'suggested_action': 'check_navigation_backend',
             }
 
@@ -117,8 +117,8 @@ class WaypointDispatcher:
             return {
                 'success': False,
                 'error_code': 'E_NAV_BACKEND_UNAVAILABLE',
-                'description': 'cyberdog navigation backend is unavailable',
-                'suggested_action': 'source_cyberdog_workspace',
+                'description': 'navigation backend is unavailable',
+                'suggested_action': 'configure_navigation_backend',
             }
         if not self._backend.send_raw_navigation_goal(
             nav_type=int(nav_type),
@@ -129,7 +129,7 @@ class WaypointDispatcher:
             return {
                 'success': False,
                 'error_code': 'E_MOVE_FAIL',
-                'description': 'failed to dispatch raw navigation goal to algorithm_manager',
+                'description': 'failed to dispatch raw navigation goal to navigation backend',
                 'suggested_action': 'check_navigation_backend',
             }
         return {'success': True}

@@ -601,6 +601,8 @@ class MissionManager:
                 task_params_json=task_params_json,
                 defaults=self._mission_defaults,
             )
+            if task.media_record:
+                self._recording_channel()
         except Exception as exc:
             self._runtime = TaskRuntime(
                 task_id=task_id,
@@ -1153,7 +1155,7 @@ class MissionManager:
             'E_SCAN_STALE': 'check_lidar_topic',
             'E_SCAN_QUALITY': 'check_lidar_data',
             'E_SCAN_FRONT_QUALITY': 'check_lidar_data',
-            'E_BOTTOM_STATUS': 'check_cyberdog_motion_status',
+            'E_BOTTOM_STATUS': 'check_motion_status',
             'E_LOW_BATTERY': 'charge_robot',
         }
         self._pause_with_error(
@@ -2311,21 +2313,27 @@ class MissionManager:
             urgent=not bool(payload.get('success', False)),
         )
 
+    def _recording_channel(self):
+        channel = self._media_actions_cfg.get('record_channel_id')
+        if not isinstance(channel, str) or not channel.strip():
+            raise ValueError('media_actions.record_channel_id is required for task recording')
+        return channel
+
     def _start_recording_if_needed(self):
         if self._task is None or not self._task.media_record or self._recording_active:
             return
-        channel_id = str(self._media_actions_cfg.get('record_channel_id', 'cyberdog_main'))
-        self._recording_active = True
+        channel_id = self._recording_channel()
         self._publish_media_control(
             action='record_start',
             channel_id=channel_id,
         )
+        self._recording_active = True
 
     def _stop_recording_if_needed(self):
         if not self._recording_active:
             return
         self._recording_active = False
-        channel_id = str(self._media_actions_cfg.get('record_channel_id', 'cyberdog_main'))
+        channel_id = self._recording_channel()
         self._publish_media_control(
             action='record_stop',
             channel_id=channel_id,

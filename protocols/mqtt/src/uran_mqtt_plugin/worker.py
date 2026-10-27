@@ -29,6 +29,10 @@ class MqttWorker(Worker):
         self._commands_enabled_at = float("inf")
         self.transport_enabled = bool(config.get("transport_enabled", False))
         self.default_device_id = str(config.get("device_id") or self.identity.get("device_id") or "")
+        if (self.identity.get("device_id") and config.get("device_id") and
+                config["device_id"] != self.identity["device_id"]):
+            raise ValueError("MQTT device_id differs from the Core identity")
+        self.config["device_id"] = self.default_device_id
         self.default_component_id = str(config.get("default_component_id") or "base")
         # Legacy media_ctrl packets did not carry component_id.  Keep motion
         # commands on the normal default component while routing those media
@@ -44,6 +48,26 @@ class MqttWorker(Worker):
             self.client = MqttClient(self.config, self._on_downlink, self._on_connection_state)
 
     def _on_downlink(self, payload):
+        # Management has an independent signed contract and is deliberately
+        # excluded from the legacy timestamp/target conversion. Never infer
+        # authorization from an MQTT controller name or a "user approved" bit.
+        if payload.get("msg_type") == "management_cmd":
+            if payload.get("device_id") != self.default_device_id:
+                raise ValueError("management packet targets a different device")
+            envelope = payload.get("envelope")
+            if not isinstance(envelope, dict):
+                raise ValueError("management_cmd requires a signed envelope")
+            self.emit_downlink("uran.management.command.v1", envelope,
+                str(envelope.get("payload", {}).get("request_id") or ""),
+                {"device_id": self.default_device_id, "component_id": "management",
+                 "instance_id": str(self.config.get("management_instance_id") or "uran_management"),
+                 "capability_id": "management.device"})
+            return
+        if payload.get("msg_type") == "frpc_ctrl":
+            self._publish_legacy({"msg_type": "command_rejected", "msg_version": "1.0",
+                "device_id": self.default_device_id, "timestamp_ns": now_ns(),
+                "reason": "frpc_requires_signed_user_grant", "original_msg_type": "frpc_ctrl"})
+            return
         if time.monotonic() < self._commands_enabled_at:
             self._publish_legacy({
                 "msg_type": "command_rejected", "msg_version": "1.0",

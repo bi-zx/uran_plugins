@@ -33,7 +33,9 @@ class MqttClient:
         self._reg_result = 'timeout'
         self._registration_sent = False
 
-        device_id = net_cfg.get('device_id', 'device_001')
+        device_id = net_cfg.get('device_id')
+        if not isinstance(device_id, str) or not device_id.strip():
+            raise ValueError('MQTT device_id must come from the local device identity')
         tenant_id = net_cfg.get('tenant_id', 'default')
         mqtt_cfg = net_cfg.get('mqtt', {})
         registration_cfg = net_cfg.get('registration', {})
@@ -42,7 +44,7 @@ class MqttClient:
         prefix = prefix.replace('{tenant}', tenant_id)  # legacy placeholder
 
         self._device_id = device_id
-        self._template_id = net_cfg.get('template_id', 'template_001')
+        self._template_id = net_cfg.get('template_id') or ''
         auth_cfg = net_cfg.get('auth', {})
         configured_username = auth_cfg.get('username', '')
         username_env = auth_cfg.get('username_env', '')
@@ -96,6 +98,12 @@ class MqttClient:
                     pass
 
             client = mqtt.Client(client_id=self._device_id)
+            tls = self._net_cfg.get('mqtt', {}).get('tls', {})
+            if tls.get('enabled', False):
+                # TLS verification remains enabled; no cloud-controlled
+                # tls_insecure flag is accepted.
+                client.tls_set(ca_certs=tls.get('ca_file'),
+                               certfile=tls.get('cert_file'), keyfile=tls.get('key_file'))
             if self._token:
                 client.username_pw_set(self._mqtt_username, self._token)
             client.on_connect = self._on_connect
@@ -305,4 +313,4 @@ class MqttClient:
 
         device_id = payload.get('device_id')
         template_id = payload.get('template_id')
-        return device_id == self._device_id or template_id == self._template_id
+        return device_id == self._device_id or bool(self._template_id) and template_id == self._template_id

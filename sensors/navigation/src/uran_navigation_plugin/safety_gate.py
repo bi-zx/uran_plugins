@@ -115,7 +115,7 @@ class MotionSafetyGate:
         if bottom not in {'', 'NORMAL', '0'}:
             return self._blocked(
                 'E_BOTTOM_STATUS',
-                'CyberDog motion switch_status is not NORMAL',
+                'motion backend status is not NORMAL',
                 hard_stop=True,
             )
 

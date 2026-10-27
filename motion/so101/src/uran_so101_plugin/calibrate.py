@@ -1,7 +1,7 @@
 """Command line calibration and discovery tools for the SO101 arm.
 
-The commands deliberately use only the local Feetech driver, so they can run
-on the CyberDog image without ROS or the LeRobot Python package.
+The commands deliberately use only the local Feetech driver, without ROS or
+the LeRobot Python package. Calibration output paths are chosen by the caller.
 """
 from __future__ import print_function
 
@@ -99,7 +99,7 @@ def main(argv=None):
                                       ("record-limits", "interactively record limits", command_record_limits)):
         child = sub.add_parser(name, help=help_text)
         _common(child)
-        child.add_argument("--output", default="/SDCARD/URAN/config/uran_arm_calibration.yaml")
+        child.add_argument("--output", required=name != "probe", help="device-local calibration output file")
         child.set_defaults(function=function)
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):

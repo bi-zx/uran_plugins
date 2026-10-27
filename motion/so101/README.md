@@ -2,6 +2,17 @@
 
 本插件保留通用 `arm_cartesian_velocity`、`arm_pose`、`gripper_action(toggle)` 和 `safety_action` 合约；SO101 的标定、运动学、限速和碰撞模型均在插件内部。Python 3.6 可运行，无需 Placo、NumPy、SciPy 或 PyBullet。硬件串口使用 pyserial，配置使用 PyYAML，消息校验使用 URAN SDK/interfaces。
 
+## 校准工具归属
+
+LeRobot 方式的完整校准实现位于 `uran_so101_plugin.calibrate_lerobot`，由本插件交付，不放在 `uran_profiles` 的通用工具中。安装 `uran-so101-plugin[calibration]` 后使用：
+
+```bash
+uran-so101-calibrate-lerobot --port /dev/serial/by-id/<your-arm> \
+  --output /path/to/device-data/so101_follower_arm.json
+```
+
+`--port` 和 `--output` 必须显式指定，没有机器人型号、串口序列号或部署目录默认值。流程保持原 `lerobot-so101-ik/calibrate_so101.py` 的中值/范围记录方式；现场数据留在设备持久化目录。现有 `uran-so101-calibrate` 继续提供旧的 probe / record-center / record-limits 接口；其中写标定的两个子命令也要求显式指定 `--output`，probe 不需要输出文件。产品 Profile 可以提供少量包装来选择自己的参数，不复制校准实现。
+
 ## 与 lerobot-so101-ik 对齐的行为
 
 | 内容 | 当前实现 | 与参考实现的差异 |

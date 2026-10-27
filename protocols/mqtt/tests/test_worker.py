@@ -34,3 +34,18 @@ def test_legacy_media_ctrl_defaults_to_media_component():
     assert received[0][0] == "uran.media.session-command.v1"
     assert received[0][1]["target"]["component_id"] == "media"
     assert received[0][3]["component_id"] == "media"
+
+
+def test_management_envelope_preserved_and_legacy_frpc_rejected():
+    worker = object.__new__(MqttWorker)
+    worker.default_device_id = "robot_001"
+    worker.config = {}
+    received, rejected = [], []
+    worker.emit_downlink = lambda *args: received.append(args)
+    worker._publish_legacy = lambda payload: rejected.append(payload)
+    envelope = {"payload": {"request_id": "deploy-1"}, "signature": "opaque"}
+    worker._on_downlink({"msg_type": "management_cmd", "device_id": "robot_001", "envelope": envelope})
+    assert received[0][0] == "uran.management.command.v1"
+    assert received[0][1] is envelope and received[0][3]["instance_id"] == "uran_management"
+    worker._on_downlink({"msg_type": "frpc_ctrl", "action": "start"})
+    assert len(received) == 1 and rejected[0]["reason"] == "frpc_requires_signed_user_grant"

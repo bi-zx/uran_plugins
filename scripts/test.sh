@@ -4,11 +4,7 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python_bin="${URAN_PYTHON:-}"
 if [[ -z "$python_bin" ]]; then
-  if [[ -x /home/feiyu/miniconda3/bin/python3.13 ]]; then
-    python_bin=/home/feiyu/miniconda3/bin/python3.13
-  else
-    python_bin="$(command -v python3)"
-  fi
+  python_bin="$(command -v python3)"
 fi
 framework_source="${URAN_FRAMEWORK_SOURCE:-$repo_dir/../uran_framework}"
 interfaces_source="${URAN_INTERFACES_SOURCE:-$repo_dir/../uran_interfaces}"
@@ -64,10 +60,10 @@ fi
   "$repo_dir/protocols/mqtt" "$repo_dir/motion/cyberdog2" \
   "$repo_dir/motion/control_arbiter" "$repo_dir/motion/px4" "$repo_dir/media" \
   "$repo_dir/sensors/localization" "$repo_dir/sensors/navigation" \
-  "$repo_dir/tasks/autotask" "$repo_dir/simulation"
+  "$repo_dir/tasks/autotask" "$repo_dir/simulation" "$repo_dir/network/frpc"
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 "$test_env/bin/python" -m pytest --import-mode=importlib "$repo_dir"
 clean_python_artifacts
-for package in protocols/mqtt motion/cyberdog2 motion/control_arbiter motion/px4 media sensors/localization sensors/navigation tasks/autotask simulation; do
+for package in protocols/mqtt motion/cyberdog2 motion/control_arbiter motion/px4 media sensors/localization sensors/navigation tasks/autotask simulation network/frpc; do
   clean_python_artifacts
   "$test_env/bin/python" -m build --wheel --no-isolation --outdir "$repo_dir/dist" "$repo_dir/$package"
 done

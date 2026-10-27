@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uran-frpc-plugin"
+version = "1.0.0"
+description = "Locally configured FRPC maintenance provider with expiring SSH certificates"
+requires-python = ">=3.6"
+dependencies = []
+
+[project.scripts]
+uran-frpc-provider = "uran_frpc_plugin.provider:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

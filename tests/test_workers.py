@@ -86,6 +86,20 @@ def test_mqtt_worker_decodes_control_state_param_and_media_boundaries():
         assert replies[3]["payload"]["message_type"] == cloud["msg_type"]
 
 
+def test_task_recording_requires_a_profile_channel_before_task_preparation():
+    replies = _run(autotask_factory, _lifecycle({"backend": "simulation",
+        "allow_unarbitrated_simulation": True, "state_reporting": False}, {
+        "message_type": "uran.tasks.command.v1",
+        "payload": {"schema_version": "1.0", "operation_id": "op-1",
+            "target": {"device_id": "cart_027", "component_id": "drive"},
+            "timestamp_ns": 1, "task_id": "inspection", "action": "start", "task_type": "waypoint",
+            "parameters": {"media_record": True, "waypoints": [{"lat": 39, "lon": 116}]}},
+    }))
+    assert replies[3]["status"] == "failed"
+    assert replies[3]["payload"]["stage"] == "aborted"
+    assert "media_actions.record_channel_id" in replies[3]["payload"]["error"]["description"]
+
+
 def test_mqtt_state_snapshot_preserves_all_runtime_components():
     worker = MqttWorker()
     worker.configure({"transport_enabled": False, "device_id": "robot"})
