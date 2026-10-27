@@ -56,3 +56,39 @@ def test_uplink_keeps_legacy_payload_json_for_existing_cloud():
         timestamp_ns=42, payload={"success": True})
     assert encoded["payload"] == {"success": True}
     assert encoded["payload_json"] == '{"success":true}'
+
+
+def test_move_cmd_routes_arm_velocity_and_toggle():
+    from uran_interfaces import ContractValidator
+    codec = CloudCodec()
+    for action, kind in (("", "arm_cartesian_velocity"), ("toggle", "gripper_action")):
+        message = codec.decode_public(
+            {"msg_type": "move_cmd", "component_id": "arm", "linear_vel_z": 0.02,
+             "target_pitch": None, "action": action}, operation_id="arm-test", sequence=1,
+            default_device_id="dog", default_component_id="base", received_at_ns=100)
+        assert message["payload"]["payload"]["kind"] == kind
+        ContractValidator().validate("motion/command.schema.json", message["payload"])
+    base = codec.decode_public({"msg_type": "move_cmd", "component_id": "base"},
+        operation_id="base", sequence=1, default_device_id="dog", default_component_id="base")
+    assert base["payload"]["payload"]["kind"] == "base_velocity"
+
+
+@pytest.mark.parametrize('timestamp', [1013907328, -1208728896, '1013907328'])
+def test_legacy_move_truncated_timestamp_uses_receipt_time(timestamp):
+    receipt = 1791345957119161344
+    result = CloudCodec().decode_public(
+        {'msg_type': 'move_cmd', 'component_id': 'arm', 'timestamp_ns': timestamp},
+        operation_id='test', sequence=1, default_device_id='dog',
+        default_component_id='base', received_at_ns=receipt)
+    # A deliberately arbitrary low word is reconstructed to the nearest
+    # representable timestamp; it must be in the same 32-bit epoch window.
+    assert abs(result['payload']['issued_at_ns'] - receipt) <= 0x80000000
+    assert result['payload']['valid_until_ns'] == result['payload']['issued_at_ns'] + 1000000000
+
+
+def test_real_old_unix_ns_is_not_refreshed():
+    old = 1700000000000000000
+    result = CloudCodec().decode_public(
+        {'msg_type': 'move_cmd', 'timestamp_ns': old}, operation_id='old', sequence=1,
+        default_device_id='dog', default_component_id='base', received_at_ns=1791345957119161344)
+    assert result['payload']['issued_at_ns'] == old

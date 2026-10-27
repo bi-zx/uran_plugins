@@ -48,6 +48,24 @@ def load_calibration(path):
         if key in loaded:
             data[key] = loaded[key]
     loaded_joints = loaded.get('joints')
+    # Present_Position already includes the servo homing offset. Match
+    # RealSO101: calibrated range midpoint for arm joints, drive_mode only
+    # reverses the normalized gripper coordinate.
+    if not isinstance(loaded_joints, dict) and all(isinstance(loaded.get(name), dict) for name in JOINT_NAMES):
+        loaded_joints = loaded
+        data['enabled'] = True
+        for name in JOINT_NAMES:
+            values = loaded_joints[name]
+            data['joints'][name].update({
+                'id': int(values.get('id', data['joints'][name]['id'])),
+                'raw_min': int(values['range_min']),
+                'raw_max': int(values['range_max']),
+                'raw_center': (int(values['range_min']) + int(values['range_max'])) / 2.0,
+                'direction': -1 if name == 'gripper' and int(values.get('drive_mode', 0)) else 1,
+                'drive_mode': int(values.get('drive_mode', 0)),
+                'homing_offset': int(values.get('homing_offset', 0)),
+            })
+        return data
     if isinstance(loaded_joints, dict):
         for name in JOINT_NAMES:
             values = loaded_joints.get(name)
@@ -95,40 +113,18 @@ def load_safety_range(path):
 
 
 def apply_safety_range(data, path):
-    """Apply JSON bounds, intersecting any narrower YAML bounds."""
+    """Intersect explicit limits; never manufacture or change calibration."""
+    if not is_complete(data):
+        raise ValueError('a complete calibration is required before safety limits')
     profile = load_safety_range(path)
     for name in JOINT_NAMES:
         current = data['joints'][name]
         safety = profile[name]
-        current_min = current.get('raw_min')
-        current_max = current.get('raw_max')
-        raw_min = safety['range_min']
-        raw_max = safety['range_max']
-        if current_min is not None:
-            raw_min = max(raw_min, int(current_min))
-        if current_max is not None:
-            raw_max = min(raw_max, int(current_max))
-        if raw_min >= raw_max:
-            raise ValueError('{} YAML and JSON ranges do not overlap'.format(name))
-        raw_center = current.get('raw_center')
-        try:
-            raw_center = float(raw_center)
-        except (TypeError, ValueError):
-            raw_center = (raw_min + raw_max) / 2.0
-        if not (raw_min <= raw_center <= raw_max):
-            raw_center = (raw_min + raw_max) / 2.0
-        current.update({
-            'id': safety['id'],
-            'raw_min': raw_min,
-            'raw_max': raw_max,
-            'raw_center': raw_center,
-            'direction': -1 if safety['drive_mode'] else 1,
-            'drive_mode': safety['drive_mode'],
-            'homing_offset': safety['homing_offset'],
-            'safety_range_min': safety['range_min'],
-            'safety_range_max': safety['range_max'],
-        })
-    data['enabled'] = True
+        low = max(current.get('safe_min', current['raw_min']), safety['range_min'])
+        high = min(current.get('safe_max', current['raw_max']), safety['range_max'])
+        if low >= high:
+            raise ValueError('{} calibration and safety ranges do not overlap'.format(name))
+        current.update(safe_min=low, safe_max=high)
     data['safety_range_file'] = path
     return data
 
@@ -166,8 +162,8 @@ def narrow_safety_range(data, scale=1.0):
         narrowed_max = min(int(math.floor(raw_max)), narrowed_max)
         if narrowed_min >= narrowed_max:
             raise ValueError('{} narrowed safety range is empty'.format(name))
-        values['raw_min'] = narrowed_min
-        values['raw_max'] = narrowed_max
+        values['safe_min'] = max(values.get('safe_min', raw_min), narrowed_min)
+        values['safe_max'] = min(values.get('safe_max', raw_max), narrowed_max)
     data['safety_range_scale'] = scale
     return data
 
@@ -178,9 +174,9 @@ def validate_raw_targets(data, targets):
         raise ValueError('six raw joint targets are required')
     for name, value in zip(JOINT_NAMES, targets):
         values = _joint_config(data, name)
-        raw_min = int(values['raw_min'])
-        raw_max = int(values['raw_max'])
-        if int(value) < raw_min or int(value) > raw_max:
+        raw_min = float(values.get('safe_min', values['raw_min']))
+        raw_max = float(values.get('safe_max', values['raw_max']))
+        if not math.isfinite(float(value)) or value < raw_min or value > raw_max:
             raise ValueError(
                 '{} raw target {} is outside safe range [{}, {}]'.format(
                     name, value, raw_min, raw_max))
@@ -204,17 +200,17 @@ def _joint_config(data, name):
 def is_complete(data):
     if not isinstance(data, dict) or not bool(data.get('enabled', False)):
         return False
-    for name in JOINT_NAMES:
+    for index, name in enumerate(JOINT_NAMES, 1):
         values = _joint_config(data, name)
         try:
-            raw_min = float(values['raw_min'])
-            raw_max = float(values['raw_max'])
-            direction = int(values.get('direction', 1))
-        except (KeyError, TypeError, ValueError):
-            return False
-        if not (0 <= raw_min < raw_max <= 4095):
-            return False
-        if direction not in (-1, 1):
+            low, high, center, direction = _validated_joint(data, name)
+            if int(values['id']) != index:
+                return False
+            safe_low = float(values.get('safe_min', low))
+            safe_high = float(values.get('safe_max', high))
+            if not low <= safe_low < safe_high <= high:
+                return False
+        except (KeyError, TypeError, ValueError, OverflowError):
             return False
     return True
 
@@ -225,7 +221,7 @@ def _validated_joint(data, name):
     raw_max = float(values['raw_max'])
     direction = int(values.get('direction', 1))
     raw_zero = values.get('raw_center')
-    raw_zero = (raw_min + raw_max) / 2.0 if raw_zero is None else float(raw_zero)
+    raw_zero = float(raw_zero)
     if not (0 <= raw_min < raw_max <= 4095):
         raise ValueError('{} has invalid raw limits'.format(name))
     if not (raw_min <= raw_zero <= raw_max):
@@ -243,9 +239,11 @@ def raw_to_values(data, positions):
     for index, name in enumerate(JOINT_NAMES):
         raw_min, raw_max, raw_zero, direction = _validated_joint(data, name)
         raw = float(positions[index + 1])
+        if not math.isfinite(raw):
+            raise ValueError('non-finite measured position')
         if name == 'gripper':
             value = (raw - raw_min) * 100.0 / (raw_max - raw_min)
-            value = min(100.0, max(0.0, value))
+            value = 100.0 - value if direction < 0 else value
         else:
             value = direction * (raw - raw_zero) * 360.0 / 4095.0
         result.append(value)
@@ -265,9 +263,39 @@ def values_to_raw(data, values):
         if not math.isfinite(value):
             raise ValueError('{} command is not finite'.format(name))
         if name == 'gripper':
-            value = min(100.0, max(0.0, value))
+            if not 0.0 <= value <= 100.0:
+                raise ValueError('gripper percent outside [0, 100]')
+            value = 100.0 - value if direction < 0 else value
             raw = raw_min + value * (raw_max - raw_min) / 100.0
         else:
             raw = raw_zero + direction * value * 4095.0 / 360.0
-        result.append(int(round(min(raw_max, max(raw_min, raw)))))
+        if raw < raw_min - 1e-8 or raw > raw_max + 1e-8:
+            raise ValueError('{} target exceeds calibration range'.format(name))
+        result.append(int(round(raw)))
     return result
+
+
+def joint_limits(data):
+    """Effective angular limits without changing the calibrated zero."""
+    if not is_complete(data):
+        raise ValueError('calibration is incomplete or disabled')
+    result = []
+    for name in JOINT_NAMES[:5]:
+        low, high, center, direction = _validated_joint(data, name)
+        item = data['joints'][name]
+        # Whole encoder ticks are the actual writable boundary.
+        low = math.ceil(item.get('safe_min', low))
+        high = math.floor(item.get('safe_max', high))
+        result.append(tuple(sorted(direction * (v - center) * 360.0 / 4095.0
+                                   for v in (low, high))))
+    return result
+
+
+def gripper_limits(data):
+    item = data['joints']['gripper']
+    raw = {i: data['joints'][n]['raw_center'] for i, n in enumerate(JOINT_NAMES, 1)}
+    result = []
+    for v in (item.get('safe_min', item['raw_min']), item.get('safe_max', item['raw_max'])):
+        raw[6] = v
+        result.append(raw_to_values(data, raw)[5])
+    return tuple(sorted(result))

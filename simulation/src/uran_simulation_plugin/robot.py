@@ -21,9 +21,9 @@ class MultiComponentRobot:
         kind = payload.get("kind")
         if component["kind"] == "base" and kind in {"base_velocity", "safety_action"}:
             component["state"] = deepcopy(payload)
-        elif component["kind"] == "arm" and kind in {"arm_joints", "arm_pose", "safety_action"}:
+        elif component["kind"] == "arm" and kind in {"arm_pose", "safety_action"}:
             component["state"] = deepcopy(payload)
-        elif component["kind"] == "gripper" and kind in {"gripper_position", "safety_action"}:
+        elif component["kind"] == "gripper" and kind in {"gripper_action", "safety_action"}:
             component["state"] = deepcopy(payload)
         else:
             raise ValueError(f"{kind} is not supported by {component['kind']}")

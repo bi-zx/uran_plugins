@@ -21,14 +21,18 @@ Profile and its results carry `simulation: true`.
 
 ## SO101 arm
 
-`motion/so101` is a ROS-independent worker for the six-joint SO101 follower.
-It accepts `arm_joints`, Cartesian `arm_pose` (damped least-squares IK), and
-`safety_action` commands. `serial_port` belongs in the profile's
-`worker_config`; use a persistent `/dev/serial/by-id/...` path on hardware or
-`auto` during discovery. The LeRobot safety JSON and a YAML calibration file
-are separate inputs. Torque is disabled by default, and the calibration tool
-is available as `uran-so101-calibrate probe`, `record-center`, and
-`record-limits`.
+`motion/so101` is a ROS-independent, Python 3.6-compatible SO101 worker. It
+accepts Cartesian velocity and pose commands, `gripper_action(toggle)`, and
+`safety_action`; public joint-angle control is deliberately absent. Its fixed
+period controller uses spatial DLS IK, measured feedback, joint rate limits,
+a monotonic watchdog, and STL-derived capsule/OBB self-collision checks.
+
+Use the robot's completed LeRobot calibration JSON directly; unrelated safety
+profiles never create or override calibration. Torque starts disabled. Use a
+persistent `/dev/serial/by-id/...` path in the profile. The CyberDog2 calibration
+wrapper runs the reference-style interactive homing and range acquisition.
+See [SO101 implementation and validation](../motion/so101/README.md) for
+configuration, command semantics, collision limitations, and deployment checks.
 
 The media worker also restores the legacy state fields `media_camera_list`,
 `media_channel_count`, and `media_active_protocol`. The first lists every

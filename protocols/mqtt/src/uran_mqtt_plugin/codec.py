@@ -17,6 +17,8 @@ class CloudCodec:
     SUPPORTED = {
         "control_switch",
         "move_cmd",
+        "arm_pose",
+        "gripper_action",
         "task_ctrl",
         "media_ctrl",
         "frpc_ctrl",
@@ -107,11 +109,27 @@ class CloudCodec:
                 "linear_vel_z": self._number(payload, "linear_vel_z"),
                 "angular_vel_z": self._number(payload, "angular_vel_z"),
                 "target_roll": self._number(payload, "target_roll"),
+                "arm_orientation_rad": {key: self._number(payload, "target_" + key) for key in ("roll", "pitch", "yaw") if payload.get("target_" + key) not in (None, "")},
                 "target_pitch": self._number(payload, "target_pitch"),
                 "target_yaw": self._number(payload, "target_yaw"),
                 "action": self._text(payload, "action"),
                 "extra": self._json_value(payload.get("extra_json", {})),
             })
+        elif message_type == "arm_pose":
+            position = payload.get("position_m", [0.2, 0.0, 0.25])
+            orientation = payload.get("orientation_xyzw", [0.0, 0.0, 0.0, 1.0])
+            if isinstance(position, str):
+                position = self._json_value(position)
+            if isinstance(orientation, str):
+                orientation = self._json_value(orientation)
+            body.update({"position_m": [self._number({"v": value}, "v") for value in position],
+                         "orientation_xyzw": [self._number({"v": value}, "v") for value in orientation],
+                         "frame_id": self._text(payload, "frame_id", "base")})
+        elif message_type == "gripper_action":
+            action = self._text(payload, "action", "toggle")
+            if action != "toggle":
+                raise DecodeError("gripper_action only supports toggle")
+            body["action"] = action
         elif message_type == "task_ctrl":
             params = self._json_value(payload.get("task_params_json", {}))
             task_type = self._text(payload, "task_type").strip()
@@ -160,8 +178,31 @@ class CloudCodec:
         default_component_id: str,
         validity_window_ns: int = 1_000_000_000,
         received_at_ns: Optional[int] = None,
+        component_types: Optional[Mapping[str, str]] = None,
     ) -> Dict[str, Any]:
         """Convert a legacy cloud command into a routed platform message."""
+        # Some legacy web clients serialize nanoseconds through a signed or
+        # unsigned 32-bit integer. Reconstruct the nearest full Unix-ns value
+        # instead of treating it as an old timestamp.
+        if payload.get("msg_type") == "move_cmd":
+            raw_timestamp = payload.get("timestamp_ns")
+            if raw_timestamp is not None and not isinstance(raw_timestamp, bool):
+                try:
+                    number = float(raw_timestamp)
+                    truncated = math.isfinite(number) and number.is_integer() and -(2 ** 31) <= number <= 2 ** 32 - 1
+                except (TypeError, ValueError):
+                    truncated = False
+                if truncated:
+                    payload = dict(payload)
+                    low = int(number) & 0xffffffff
+                    reference = int(received_at_ns or now_ns())
+                    epoch = reference & ~0xffffffff
+                    candidate = epoch | low
+                    if candidate - reference > 0x80000000:
+                        candidate -= 0x100000000
+                    elif reference - candidate > 0x80000000:
+                        candidate += 0x100000000
+                    payload["timestamp_ns"] = candidate
         decoded = self.decode(payload)
         legacy_type = decoded["message_type"]
         legacy_body = decoded["payload"]
@@ -174,8 +215,15 @@ class CloudCodec:
 
         timestamp_ns = int(legacy_body.get("timestamp_ns") or received_at_ns or now_ns())
         if legacy_type == "move_cmd":
+            is_arm = (component_types or {"arm": "arm"}).get(target["component_id"]) == "arm"
             action = str(legacy_body.get("action") or "").strip().lower()
-            if action:
+            if is_arm and action == "toggle":
+                motion_payload = {"kind": "gripper_action", "action": "toggle"}
+            elif is_arm and not action:
+                motion_payload = {"kind": "arm_cartesian_velocity", "frame_id": "base",
+                    "linear_mps": {axis: legacy_body["linear_vel_" + axis] for axis in ("x", "y", "z")},
+                    "angular_rps": {"x": 0.0, "y": 0.0, "z": legacy_body["angular_vel_z"]}}
+            elif action:
                 motion_payload: Dict[str, Any] = {
                     "kind": "safety_action",
                     "action": action,
@@ -198,6 +246,8 @@ class CloudCodec:
                         "yaw": legacy_body["target_yaw"],
                     },
                 }
+            if is_arm and not action and legacy_body["arm_orientation_rad"]:
+                motion_payload["orientation_rad"] = legacy_body["arm_orientation_rad"]
             extra = legacy_body.get("extra")
             metadata: Dict[str, Any] = {
                 "source": "legacy_mqtt",
@@ -215,6 +265,28 @@ class CloudCodec:
                 "valid_until_ns": timestamp_ns + max(1, int(validity_window_ns)),
                 "payload": motion_payload,
                 "metadata": metadata,
+            }
+            message_type = "uran.motion.command.v1"
+        elif legacy_type == "arm_pose":
+            document = {
+                "schema_version": "1.0", "operation_id": operation_id,
+                "target": target, "controller": str(legacy_body.get("controller") or "keyboard"),
+                "sequence": int(sequence), "issued_at_ns": timestamp_ns,
+                "valid_until_ns": timestamp_ns + max(1, int(validity_window_ns)),
+                "payload": {"kind": "arm_pose", "frame_id": legacy_body["frame_id"],
+                            "position_m": legacy_body["position_m"],
+                            "orientation_xyzw": legacy_body["orientation_xyzw"]},
+                "metadata": {"source": "mqtt_keyboard"},
+            }
+            message_type = "uran.motion.command.v1"
+        elif legacy_type == "gripper_action":
+            document = {
+                "schema_version": "1.0", "operation_id": operation_id,
+                "target": target, "controller": str(legacy_body.get("controller") or "keyboard"),
+                "sequence": int(sequence), "issued_at_ns": timestamp_ns,
+                "valid_until_ns": timestamp_ns + max(1, int(validity_window_ns)),
+                "payload": {"kind": "gripper_action", "action": "toggle"},
+                "metadata": {"source": "mqtt_keyboard"},
             }
             message_type = "uran.motion.command.v1"
         elif legacy_type == "task_ctrl":

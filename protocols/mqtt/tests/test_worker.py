@@ -7,6 +7,7 @@ from uran_mqtt_plugin.worker import MqttWorker
 def test_legacy_media_ctrl_defaults_to_media_component():
     worker = object.__new__(MqttWorker)
     worker.codec = CloudCodec()
+    worker.config = {}
     worker._commands_enabled_at = 0.0
     worker._sequence = 0
     worker._sequence_lock = threading.Lock()

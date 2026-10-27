@@ -43,9 +43,9 @@ class ControlArbiterWorker(Worker):
             "base_velocity": "motion.base.velocity",
             "base_posture": "motion.base.posture",
             "safety_action": "motion.base.safety",
-            "arm_joints": "motion.arm.joints",
+            "arm_cartesian_velocity": "motion.arm.cartesian_velocity",
             "arm_pose": "motion.arm.pose",
-            "gripper_position": "motion.gripper.position",
+            "gripper_action": "motion.gripper.action",
         }.get(str(payload.get("kind") or ""), "")
 
     def _motion_message(self, document: Mapping[str, Any]) -> Mapping[str, Any]:

@@ -12,8 +12,7 @@ from .robot import MultiComponentRobot
 class SimulationWorker(Worker):
     plugin_id = "uran-multi-component-simulation"
     plugin_version = "0.1.0"
-    capabilities = ("motion.base.velocity", "motion.arm.joints",
-                    "motion.arm.pose", "motion.gripper.position",
+    capabilities = ("motion.base.velocity", "motion.arm.pose", "motion.gripper.action",
                     "motion.base.safety", "motion.arm.safety", "motion.gripper.safety")
 
     def configure(self, config: Mapping[str, Any]) -> None:

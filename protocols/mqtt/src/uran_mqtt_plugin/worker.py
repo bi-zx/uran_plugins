@@ -69,6 +69,7 @@ class MqttWorker(Worker):
             default_component_id=default_component_id,
             validity_window_ns=self.validity_window_ns,
             received_at_ns=received_at_ns,
+            component_types=self.config.get("component_types", {"base": "base", "arm": "arm"}),
         )
         if payload.get("msg_type") == "state_query":
             requested = message["payload"].get("field_names") or []
@@ -85,6 +86,9 @@ class MqttWorker(Worker):
             "uran.motion.command.v1": {
                 "base_velocity": "motion.base.velocity",
                 "base_posture": "motion.base.posture",
+                "arm_pose": "motion.arm.pose",
+                "arm_cartesian_velocity": "motion.arm.cartesian_velocity",
+                "gripper_action": "motion.gripper.action",
                 "safety_action": "motion.base.safety",
             }.get(str(message["payload"].get("payload", {}).get("kind") or ""), ""),
             "uran.tasks.command.v1": "tasks.lifecycle",
@@ -94,6 +98,8 @@ class MqttWorker(Worker):
             "uran.legacy.frpc-ctrl.v1": "network.frpc.control",
         }.get(message["message_type"], "")
         target = dict(message["payload"].get("target") or {})
+        if message["payload"].get("payload", {}).get("kind") == "safety_action" and self.config.get("component_types", {"arm": "arm"}).get(default_component_id) == "arm":
+            capability = "motion.arm.safety"
         if capability:
             target["capability_id"] = capability
         self.emit_downlink(message["message_type"], message["payload"],

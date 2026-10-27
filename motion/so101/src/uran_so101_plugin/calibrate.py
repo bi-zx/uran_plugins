@@ -40,6 +40,7 @@ def _read_positions(args):
     bus = FeetechBus(_resolve_port(args.port, args.baudrate), args.baudrate)
     bus.open()
     try:
+        bus.set_torque(range(1, 7), False)
         return bus.read_positions(range(1, 7))
     finally:
         bus.close()
@@ -65,7 +66,8 @@ def command_record_limits(args):
     bus = FeetechBus(port, args.baudrate)
     bus.open()
     try:
-        print("Disable torque and leave a visible margin from every hard stop.")
+        bus.set_torque(range(1, 7), False)
+        print("Torque disabled. Support the arm and leave a visible margin from every hard stop.")
         for name, motor_id in zip(JOINT_NAMES, range(1, 7)):
             print("\nJoint {} (ID {})".format(name, motor_id))
             input("Move to the safe LOWER endpoint, then press ENTER: ")
