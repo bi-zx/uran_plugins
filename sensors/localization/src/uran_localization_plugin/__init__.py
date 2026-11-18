@@ -1,5 +1,6 @@
 from .closed_loop_manager import ClosedLoopManager
 from .geo_pose_fuser import GeoPoseFuser
+from .gnss_map_alignment import GnssMapAlignment
 from .gps_status import GpsStatusTracker
 from .gps_supervisor import GpsSupervisor
 from .gps_vo_yaw_aligner import GpsVoYawAligner
@@ -13,6 +14,7 @@ __all__ = [
     'PoseRegistry',
     'GeoPoseFuser',
     'GpsStatusTracker',
+    'GnssMapAlignment',
     'GpsSupervisor',
     'GpsVoYawAligner',
     'VisualPoseSupervisor',

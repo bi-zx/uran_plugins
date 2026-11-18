@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "uran-localization-plugin"
-version = "0.1.0"
+version = "0.2.0"
 description = "ROS-independent URAN GPS, visual odometry and geo-fusion algorithms"
 requires-python = ">=3.10"
 dependencies = ["uran-worker-sdk>=1,<2", "uran-interfaces>=1,<2"]

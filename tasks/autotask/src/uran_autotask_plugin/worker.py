@@ -2,20 +2,25 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import os
 import re
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping
 
 from uran_interfaces import ContractValidator
 from uran_localization_plugin import ClosedLoopManager, GeoReferenceConfig, MapProjector, PoseRegistry
 from uran_navigation_plugin import StraightDriveController
 from uran_navigation_plugin.depth_scan_adapter import VirtualLaserScan
+from uran_navigation_plugin.terrain import terrain_cells, terrain_parameters
 from uran_worker_sdk import Worker, WorkerServer
 
-from .adapters import CyberDogAlgorithmManagerBackend, CyberDogCameraCaptureBackend, SimulatedNavigationBackend
+from .adapters import SimulatedNavigationBackend, ros_backend_factory
 from .mission import MissionManager
+from .map_mission import MapMission
 from .task_models import TERMINAL_TASK_STAGES
 
 
@@ -28,7 +33,7 @@ class _MissionContext:
     operation_id: str
     task_id: str
     target: dict
-    manager: MissionManager
+    manager: MissionManager | MapMission
     move_gateway: Any
     straight_drive: Any
 
@@ -40,6 +45,7 @@ class _LocalMoveGateway:
         self.task_id = task_id
         self.target = dict(target)
         self.sequence = 0
+        self.map_mission = None
 
     def _send(self, payload: dict, *, reason: str) -> None:
         if (not self.worker.arbiter_instance and self.worker.backend_is_simulation and
@@ -71,7 +77,11 @@ class _LocalMoveGateway:
     def velocity(self, *, linear_x: float, angular_z: float, source: str,
                  reason: str, task_id: str) -> None:
         del source, task_id
-        self._send({"kind": "base_velocity", "frame_id": "base_link",
+        if self.map_mission is not None and not self.map_mission.motion_allowed(linear_x, angular_z):
+            self.map_mission.motion_denied = True
+            self.stop(reason="waiting_for_ground_clearance" if self.map_mission.waiting_for_clearance else "outside_traversable_route")
+            return
+        self._send({"kind": "base_velocity", "frame_id": self.worker.body_frame,
                     "linear_mps": {"x": float(linear_x), "y": 0.0, "z": 0.0},
                     "angular_rps": {"x": 0.0, "y": 0.0, "z": float(angular_z)}},
                    reason=reason)
@@ -82,8 +92,8 @@ class _LocalMoveGateway:
 
 class AutotaskWorker(Worker):
     plugin_id = "uran-autotask"
-    plugin_version = "0.1.0"
-    capabilities = ("tasks.waypoint", "tasks.outdoor", "tasks.lifecycle")
+    plugin_version = "0.2.0"
+    capabilities = ("tasks.waypoint", "tasks.outdoor", "tasks.lifecycle", "tasks.area_explore", "tasks.map_patrol")
 
     def configure(self, config: Mapping[str, Any]) -> None:
         self.validator = ContractValidator()
@@ -91,6 +101,7 @@ class AutotaskWorker(Worker):
         self.defaults = dict(config.get("mission_defaults") or {})
         self.expected_device_id = str(config.get("device_id") or self.identity.get("device_id") or "")
         self.arbiter_instance = str(config.get("arbiter_instance") or "")
+        self.body_frame = str(config.get("body_frame","base_link"))
         self.backend_is_simulation = False
         self.allow_unarbitrated_simulation = bool(
             config.get("allow_unarbitrated_simulation", False))
@@ -120,12 +131,13 @@ class AutotaskWorker(Worker):
         if backend_name == "simulation":
             self.backend = SimulatedNavigationBackend()
             self.backend_is_simulation = True
-        elif backend_name == "cyberdog2_ros2":
-            self._configure_ros2(config)
         elif backend_name != "unavailable":
-            raise ValueError(f"unsupported autotask backend: {backend_name}")
+            factory = ros_backend_factory(config)
+            if factory is None:
+                raise ValueError(f"no ROS adapter configured for backend: {backend_name}")
+            self._configure_ros2(config, factory)
 
-    def _configure_ros2(self, config: Mapping[str, Any]) -> None:
+    def _configure_ros2(self, config: Mapping[str, Any], factory) -> None:
         try:
             import rclpy
             from rclpy.executors import MultiThreadedExecutor
@@ -138,10 +150,7 @@ class AutotaskWorker(Worker):
         thread = threading.Thread(target=executor.spin, daemon=True)
         thread.start()
         try:
-            self.backend = CyberDogAlgorithmManagerBackend(node, dict(config.get("cyberdog_backend") or {}))
-            camera_cfg = dict(config.get("camera_capture") or {})
-            if camera_cfg.get("enabled", True):
-                self.camera_capture = CyberDogCameraCaptureBackend(node, camera_cfg)
+            self.backend, self.camera_capture = factory(node, config)
         except Exception:
             executor.shutdown(timeout_sec=2.0)
             node.destroy_node()
@@ -179,7 +188,8 @@ class AutotaskWorker(Worker):
                        payload: Mapping[str, Any], urgent: bool = False) -> None:
         del data_type, urgent
         runtime = context.manager.runtime
-        status = "cancelled" if context.operation_id in self.cancelled_operations else (
+        cancelled = (context.operation_id in self.cancelled_operations or getattr(context.manager,"outcome","") == "cancelled")
+        status = "cancelled" if cancelled and runtime.stage in TERMINAL_TASK_STAGES else (
             "succeeded" if runtime.stage == "completed" else (
                 "failed" if runtime.stage == "aborted" else "running"))
         sequence = self.event_sequences.get(context.operation_id, 0) + 1
@@ -241,14 +251,33 @@ class AutotaskWorker(Worker):
         gateway = _LocalMoveGateway(self, operation_id=operation_id,
                                     task_id=str(command["task_id"]), target=target)
         logger = logging.getLogger(f"uran_autotask.{operation_id}")
+        straight_config = dict(self.config.get("straight_drive") or {})
+        is_map_task = command["task_type"] in ("area_explore", "map_patrol")
+        if is_map_task:
+            resolution = float((command.get("parameters") or {}).get("resolution_m", self.config.get("mapping", {}).get("resolution_m", 0.5)))
+            tolerance = min(0.15, resolution * 0.3)
+            straight_config.update(target_tolerance_m=tolerance, target_tolerance_relaxed_m=tolerance,
+                                   target_tolerance_final_m=tolerance, goal_pass_margin_m=tolerance)
         straight = StraightDriveController(
-            config=dict(self.config.get("straight_drive") or {}), move_gateway=gateway,
-            pose_getter=self.registry.latest_visual_pose, map_pose_getter=self.registry.latest_map_pose,
+            config=straight_config, move_gateway=gateway,
+            pose_getter=self.registry.latest_visual_pose,
+            map_pose_getter=(lambda: context.manager.pose) if is_map_task else self.registry.latest_map_pose,
             now_ns_getter=time.time_ns, logger=logger,
             control_state_getter=lambda: {"control_mode": self.control_mode,
                                           "controller": self.controller,
                                           "battery_level": self.battery_level})
         context = _MissionContext(operation_id, str(command["task_id"]), target, None, gateway, straight)
+        if is_map_task:
+            mapping_config = dict(self.config.get("mapping") or {})
+            data_dir = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+            database = mapping_config.get("map_database", data_dir / "uran" / "maps.sqlite3")
+            manager = MapMission(command, mapping_config, database, straight,
+                lambda acquire, reason: self._lease(context, acquire=acquire, reason=reason),
+                lambda: self._emit_progress(context, data_type="task_progress", payload=context.manager.build_status_payload()),
+                lambda: self.control_mode)
+            context.manager = manager
+            gateway.map_mission = manager
+            return context
         context.manager = MissionManager(
             logger=logger, backend=self.backend, camera_capture=self.camera_capture,
             projector=self.projector, closed_loop_manager=self.closed_loop,
@@ -287,16 +316,26 @@ class AutotaskWorker(Worker):
                     existing = self.contexts[self.by_target_task[key]]
                     if existing.manager.runtime.stage not in TERMINAL_TASK_STAGES:
                         raise ValueError("matching task is already active")
-                if self.backend is None:
+                map_task = command["task_type"] in ("area_explore", "map_patrol")
+                for active in self.contexts.values():
+                    if not active.manager.has_active_task():
+                        continue
+                    other_map = isinstance(active.manager, MapMission)
+                    if (map_task or other_map) and (active.target["device_id"],active.target["component_id"]) == key[:2]:
+                        raise ValueError("motion component is already in use")
+                    if (other_map and not active.manager.patrol and command["task_type"] == "area_explore" and
+                            active.manager.grid.map_id == (command.get("parameters") or {}).get("map_id")):
+                        raise ValueError("survey map is already in use")
+                if self.backend is None and not map_task:
                     raise RuntimeError("task navigation backend is unavailable")
                 if not self.arbiter_instance and not self.allow_unarbitrated_simulation:
                     raise RuntimeError("arbiter_instance is required for mission motion")
                 context = self._new_context(command)
-                self.contexts[context.operation_id] = context
-                self.by_target_task[key] = context.operation_id
                 context.manager.handle_task_command(
                     action="start", task_id=context.task_id, task_type=str(command["task_type"]),
                     task_params_json=json.dumps(command.get("parameters") or {}))
+                self.contexts[context.operation_id] = context
+                self.by_target_task[key] = context.operation_id
             else:
                 original = self.by_target_task.get(key)
                 if not original:
@@ -326,26 +365,53 @@ class AutotaskWorker(Worker):
         value = dict(value)
         kind = str(document["observation_type"])
         timestamp_ns = int(document["timestamp_ns"])
+        device_id = document["source"]["device_id"]
+        if self.expected_device_id and device_id != self.expected_device_id:
+            raise ValueError("observation belongs to another device")
         with self.lock:
-            if kind == "gps_fix":
-                self.registry.update_gps_payload(
-                    lat=float(value.get("latitude_deg", value.get("lat"))),
-                    lon=float(value.get("longitude_deg", value.get("lon"))),
-                    alt=float(value.get("altitude_m", value.get("alt", 0.0))),
-                    fix_type=int(value.get("fix_type", 0)), num_sv=int(value.get("num_sv", 0)),
-                    timestamp_ns=timestamp_ns)
-            elif kind in {"map_pose", "odometry"}:
-                self.registry.update_map_pose({**value, "timestamp_ns": timestamp_ns})
-            elif kind in {"visual_pose", "visual_odometry"}:
-                self.registry.update_visual_pose({**value, "timestamp_ns": timestamp_ns})
+            missions = [c.manager for c in self.contexts.values() if isinstance(c.manager, MapMission)
+                      and c.target["device_id"] == device_id and c.manager.has_active_task() and c.manager.slam_ready]
+            position_recorded = self.registry.record_observation(kind, value, timestamp_ns, document.get("frame_id"))
+            if kind == "slam_session_state":
+                context = self.contexts.get(value["operation_id"])
+                if (context and isinstance(context.manager,MapMission) and context.manager.has_active_task()
+                        and context.target["device_id"] == device_id and context.manager.grid.map_id == value["map_id"]
+                        and context.manager.manage_slam):
+                    context.manager.update_slam(value)
+            elif kind in {"gps", "gps_fix", "geographic_position"}:
+                for manager in missions:
+                    manager.update_gps({**self.registry.gps_position(),"horizontal_fix_valid":value.get("horizontal_fix_valid") is True}, timestamp_ns)
+            elif kind in {"terrain_cells", "depth_rays", "slam_pose"} or (kind == "map_pose" and "map_id" in value):
+                map_id = value["map_id"]
+                frame = document["frame_id"]
+                for manager in missions:
+                    if manager.grid.map_id != map_id or manager.grid.frame_id != frame:
+                        continue
+                    if kind in {"map_pose", "slam_pose"}:
+                        normalized = self.registry.latest_map_pose()
+                        manager.update_pose({**value, "yaw_deg": normalized["yaw_deg"]}, timestamp_ns)
+                    elif manager.runtime.stage != "paused":
+                        if kind == "depth_rays":
+                            cells = terrain_cells(value["beams"], value["ground_xyz"], manager.grid.resolution, manager.terrain_config)
+                        else:
+                            if (terrain_parameters(value.get("terrain") or {}) != manager.grid.terrain or
+                                    value.get("resolution_m", manager.grid.resolution) != manager.grid.resolution):
+                                continue
+                            cells = value["cells"]
+                        manager.update_terrain(cells, timestamp_ns)
             elif kind == "laser_scan":
-                scan = VirtualLaserScan(angle_min=float(value["angle_min"]),
-                    angle_max=float(value["angle_max"]), angle_increment=float(value["angle_increment"]),
-                    range_min=float(value["range_min"]), range_max=float(value["range_max"]),
-                    ranges=[float(item) for item in value["ranges"]])
+                scan = VirtualLaserScan.from_observation(value)
                 for context in self.contexts.values():
+                    if (context.target["device_id"] != device_id or not context.manager.has_active_task() or
+                            isinstance(context.manager,MapMission) and not context.manager.slam_ready):
+                        continue
+                    if isinstance(context.manager, MapMission):
+                        if document.get("frame_id") != self.body_frame or timestamp_ns <= context.manager.last_scan_stamp:
+                            continue
+                        context.manager.last_scan_stamp = timestamp_ns
+                        context.manager.scan_usable = any(r > 0 and r >= scan.range_min for r in scan.ranges)
                     context.straight_drive.update_scan(scan)
-            else:
+            elif not position_recorded:
                 raise ValueError(f"unsupported task observation_type: {kind}")
         return {"status": "succeeded", "operation_id": request["operation_id"],
                 "payload": {"observation_type": kind, "updated": True}}
@@ -355,12 +421,13 @@ class AutotaskWorker(Worker):
             context = self.contexts.get(operation_id)
             if context is None:
                 raise ValueError("operation does not exist")
-            self.cancelled_operations.add(operation_id)
+            if not isinstance(context.manager,MapMission):
+                self.cancelled_operations.add(operation_id)
             result = context.manager.stop_current_operation(reason="cancelled_by_operation")
             if not result["accepted"]:
                 raise ValueError(result["message"])
-        return {"status": "cancelled", "operation_id": operation_id,
-                "payload": context.manager.build_status_payload()}
+        status = "running" if context.manager.has_active_task() else "cancelled"
+        return {"status": status, "operation_id": operation_id, "payload": context.manager.build_status_payload()}
 
     def on_state(self, subscription_id: str, field: str,
                  value: Mapping[str, Any], sequence: int) -> None:

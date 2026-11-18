@@ -59,6 +59,8 @@ class StraightDriveController:
             0.0,
             float(cfg.get('max_angular_speed_radps', 0.7)),
         )
+        self.turn_tolerance_rad = math.radians(float(cfg.get('turn_tolerance_deg', 5.0)))
+        self._turn_yaw_rad = None
         self.heading_kp = max(0.0, float(cfg.get('heading_kp', 1.4)))
         self.slowdown_heading_rad = math.radians(
             float(cfg.get('slowdown_heading_deg', 55.0))
@@ -178,6 +180,7 @@ class StraightDriveController:
         target_x: Optional[float] = None,
         target_y: Optional[float] = None,
         target_tolerance_m: Optional[float] = None,
+        turn_yaw_deg: Optional[float] = None,
         command_source: Optional[str] = None,
         route_start_x: Optional[float] = None,
         route_start_y: Optional[float] = None,
@@ -217,7 +220,13 @@ class StraightDriveController:
                 'code': 'E_STRAIGHT_DRIVE_TARGET_INVALID',
                 'message': 'target_x and target_y must be finite numbers',
             }
-        if distance is None and duration is None and not has_target:
+        turn_yaw = _finite_float(turn_yaw_deg)
+        if turn_yaw_deg is not None and (turn_yaw is None or has_target or distance_m is not None or duration_s is not None):
+            return {'accepted': False, 'code': 'E_STRAIGHT_DRIVE_TARGET_INVALID',
+                    'message': 'turn_yaw_deg is a finite standalone map heading'}
+        if turn_yaw is not None and self.max_angular_speed_radps <= 0.0:
+            return {'accepted': False, 'code': 'E_TURN_DISABLED', 'message': 'angular speed is disabled'}
+        if distance is None and duration is None and not has_target and turn_yaw is None:
             return {
                 'accepted': False,
                 'code': 'E_STRAIGHT_DRIVE_TARGET_EMPTY',
@@ -228,7 +237,7 @@ class StraightDriveController:
             self.stop(reason='replaced_by_new_local_goal')
 
         now = self._monotonic_getter() if monotonic_s is None else float(monotonic_s)
-        pose_source = 'map' if has_target else 'local'
+        pose_source = 'map' if has_target or turn_yaw is not None else 'local'
         pose = self._current_pose(source=pose_source)
         needs_pose = (distance is not None) or has_target
         if needs_pose and not self._pose_has_xy(pose):
@@ -248,7 +257,7 @@ class StraightDriveController:
                 'code': 'E_STRAIGHT_DRIVE_SPEED_INVALID',
                 'message': 'speed_mps must be a finite number',
             }
-        if self.max_speed_mps <= 0.0:
+        if self.max_speed_mps <= 0.0 and turn_yaw is None:
             return {
                 'accepted': False,
                 'code': 'E_STRAIGHT_DRIVE_SPEED_DISABLED',
@@ -256,6 +265,10 @@ class StraightDriveController:
             }
 
         yaw = self._pose_yaw_rad(pose)
+        if turn_yaw is not None and (yaw is None or not self._pose_has_xy(pose)):
+            return {'accepted': False, 'code': 'E_STRAIGHT_DRIVE_POSE_UNAVAILABLE',
+                    'message': 'map pose and yaw are required to turn in place'}
+        self._turn_yaw_rad = None if turn_yaw is None else math.radians(turn_yaw)
         self._active = True
         self._task_id = str(task_id or '')
         self._started_monotonic_s = now
@@ -344,6 +357,7 @@ class StraightDriveController:
             'target_tolerance_m': self._effective_target_tolerance_m(now) if has_target else None,
             'target_tolerance_base_m': self._target_tolerance_base_m if has_target else None,
             'target_tolerance_max_m': self._target_tolerance_max_m if has_target else None,
+            'turn_yaw_deg': turn_yaw,
             'pose_source': self._pose_source,
             'command_source': self._active_command_source,
             'goal_kind': self._goal_kind,
@@ -429,7 +443,7 @@ class StraightDriveController:
         # Never declare a goal reached from an unavailable or stale pose.  The
         # previous implementation checked completion first, which could use a
         # frozen position sample and silently finish a route.
-        if not pose_available:
+        if not pose_available or (self._turn_yaw_rad is not None and self._pose_yaw_rad(pose) is None):
             return self._handle_safety_block(
                 now,
                 code='E_POSE_UNAVAILABLE',
@@ -554,7 +568,7 @@ class StraightDriveController:
                 desired_vx,
                 desired_wz,
                 reason=decision.state,
-                force_zero_linear=decision.state == 'stop',
+                force_zero_linear=self._turn_yaw_rad is not None or decision.state == 'stop',
                 speed_cap_mps=safety.get('speed_cap_mps'),
                 monotonic_s=now,
             )
@@ -674,6 +688,12 @@ class StraightDriveController:
         *,
         pose: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
+        if self._turn_yaw_rad is not None:
+            pose = self._current_pose(source='map') if pose is None else pose
+            yaw = self._pose_yaw_rad(pose)
+            if yaw is not None and abs(_normalize_angle(self._turn_yaw_rad - yaw)) <= self.turn_tolerance_rad:
+                return 'heading reached'
+            return None
         if self._target_duration_s is not None and self.elapsed_s(now) >= self._target_duration_s:
             return 'duration reached'
         if (
@@ -816,6 +836,11 @@ class StraightDriveController:
         now: Optional[float] = None,
         speed_cap_mps: Optional[float] = None,
     ) -> tuple:
+        if self._turn_yaw_rad is not None:
+            if decision.state in {'blocked', 'stop'}:
+                return 0.0, 0.0
+            angular = self.heading_kp * self._theta_goal(pose)
+            return 0.0, _clamp(angular, -self.max_angular_speed_radps, self.max_angular_speed_radps)
         theta = _normalize_angle(float(decision.theta_target))
         abs_theta = abs(theta)
         wz = _clamp(
@@ -898,6 +923,8 @@ class StraightDriveController:
         return _clamp(desired_speed, 0.0, self.max_speed_mps), wz
 
     def _theta_goal(self, pose: Optional[Dict[str, Any]]) -> float:
+        if self._turn_yaw_rad is not None:
+            return _normalize_angle(self._turn_yaw_rad - self._pose_yaw_rad(pose))
         if self._target_x is not None and self._target_y is not None:
             if self._pose_has_xy(pose):
                 self._route_state = self._route_follower.update(

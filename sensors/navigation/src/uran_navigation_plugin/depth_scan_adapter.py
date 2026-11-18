@@ -88,6 +88,15 @@ class VirtualLaserScan:
     range_max: float
     ranges: List[float]
 
+    @classmethod
+    def from_observation(cls, value):
+        return cls(float(value["angle_min"]), float(value["angle_max"]), float(value["angle_increment"]),
+                   float(value["range_min"]), float(value["range_max"]),
+                   [math.nan if ray is None else float(ray) for ray in value["ranges"]])
+
+    def range_values(self):
+        return [ray if math.isfinite(ray) else ("inf" if ray == math.inf else None) for ray in self.ranges]
+
 
 class DepthPointCloudScanAdapter:
     """Convert an organized PointCloud2 into a base-frame planar scan."""

@@ -13,7 +13,7 @@ from .obstacle_avoidance import GapAvoidancePlanner
 
 class NavigationWorker(Worker):
     plugin_id = "uran-navigation"
-    plugin_version = "0.1.0"
+    plugin_version = "0.2.0"
     capabilities = ("sensors.depth.scan", "sensors.obstacle.avoidance")
 
     def configure(self, config: Mapping[str, Any]) -> None:
@@ -21,14 +21,6 @@ class NavigationWorker(Worker):
         self.depth = DepthPointCloudScanAdapter(dict(config.get("depth_scan") or {}))
         self.planner = GapAvoidancePlanner(dict(config.get("obstacle_avoidance") or {}))
         self.expected_device_id = str(config.get("device_id") or self.identity.get("device_id") or "")
-
-    @staticmethod
-    def _scan(value: Mapping[str, Any]) -> VirtualLaserScan:
-        return VirtualLaserScan(
-            angle_min=float(value["angle_min"]), angle_max=float(value["angle_max"]),
-            angle_increment=float(value["angle_increment"]),
-            range_min=float(value["range_min"]), range_max=float(value["range_max"]),
-            ranges=[float(item) for item in value["ranges"]])
 
     @staticmethod
     def _cloud(value: Mapping[str, Any]):
@@ -56,7 +48,7 @@ class NavigationWorker(Worker):
             raise ValueError("navigation observation value must be an object")
         kind = str(observation["observation_type"])
         if kind == "laser_scan":
-            scan = self._scan(value)
+            scan = VirtualLaserScan.from_observation(value)
         elif kind == "depth_pointcloud":
             transform_data = dict(value.get("transform") or {})
             transform = RigidTransform(
@@ -74,7 +66,7 @@ class NavigationWorker(Worker):
                 "angle_min": scan.angle_min, "angle_max": scan.angle_max,
                 "angle_increment": scan.angle_increment,
                 "range_min": scan.range_min, "range_max": scan.range_max,
-                "ranges": list(scan.ranges),
+                "ranges": scan.range_values(),
             },
             "obstacle": decision.to_dict(),
             "depth_adapter": self.depth.snapshot(),

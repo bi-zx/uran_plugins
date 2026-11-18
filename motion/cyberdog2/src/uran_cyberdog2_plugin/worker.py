@@ -12,7 +12,7 @@ from .controller import MotionCommand, MotionController, SimulatedBackend
 
 class CyberDogWorker(Worker):
     plugin_id = "uran-cyberdog2-motion"
-    plugin_version = "0.1.0"
+    plugin_version = "0.2.0"
     capabilities = ("motion.base.velocity", "motion.base.posture", "motion.base.safety")
 
     def configure(self, config: Mapping[str, Any]) -> None:

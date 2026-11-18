@@ -14,7 +14,7 @@ from .pose_registry import PoseRegistry
 
 class LocalizationWorker(Worker):
     plugin_id = "uran-localization"
-    plugin_version = "0.1.0"
+    plugin_version = "0.2.0"
     capabilities = ("sensors.localization", "sensors.localization.fusion")
 
     def configure(self, config: Mapping[str, Any]) -> None:
@@ -47,23 +47,7 @@ class LocalizationWorker(Worker):
         value = dict(value)
         kind = str(observation["observation_type"])
 
-        if kind in {"gps", "gps_fix", "geographic_position"}:
-            self.registry.update_gps_payload(
-                lat=float(value.get("latitude_deg", value.get("lat"))),
-                lon=float(value.get("longitude_deg", value.get("lon"))),
-                alt=float(value.get("altitude_m", value.get("alt", 0.0))),
-                fix_type=int(value.get("fix_type", 0)),
-                num_sv=int(value.get("num_sv", 0)),
-                timestamp_ns=timestamp_ns)
-        elif kind in {"map_pose", "odometry"}:
-            self.registry.update_map_pose({**value, "timestamp_ns": timestamp_ns,
-                                           "frame_id": observation.get("frame_id", value.get("frame_id", "map"))})
-        elif kind in {"visual_pose", "visual_odometry"}:
-            self.registry.update_visual_pose({**value, "timestamp_ns": timestamp_ns,
-                                              "frame_id": observation.get("frame_id", value.get("frame_id", "odom"))})
-        elif kind == "cloud_position":
-            self.registry.update_cloud_position(value)
-        elif kind != "localization_query":
+        if not self.registry.record_observation(kind, value, timestamp_ns, observation.get("frame_id")) and kind != "localization_query":
             raise ValueError(f"unsupported localization observation_type: {kind}")
 
         yaw_result = self.yaw_aligner.update(

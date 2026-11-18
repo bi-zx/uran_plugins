@@ -22,6 +22,24 @@ class PoseRegistry:
         self._map_pose_history = deque(maxlen=max_history)
         self._visual_pose_history = deque(maxlen=max_history)
 
+    def record_observation(self, kind, value, timestamp_ns, frame_id=None):
+        """Ingest the common position observations used by localization and task workers."""
+        if kind in {"gps", "gps_fix", "geographic_position"}:
+            self.update_gps_payload(lat=float(value.get("latitude_deg", value.get("lat"))),
+                                    lon=float(value.get("longitude_deg", value.get("lon"))),
+                                    alt=float(value.get("altitude_m", value.get("alt", 0.0))),
+                                    fix_type=int(value.get("fix_type", 0)), num_sv=int(value.get("num_sv", 0)),
+                                    timestamp_ns=timestamp_ns)
+        elif kind in {"map_pose", "odometry", "slam_pose"}:
+            self.update_map_pose({**value, "timestamp_ns": timestamp_ns, "frame_id": frame_id or value.get("frame_id", "map")})
+        elif kind in {"visual_pose", "visual_odometry"}:
+            self.update_visual_pose({**value, "timestamp_ns": timestamp_ns, "frame_id": frame_id or value.get("frame_id", "odom")})
+        elif kind == "cloud_position":
+            self.update_cloud_position(value)
+        else:
+            return False
+        return True
+
     def update_cloud_position(self, position: Optional[Dict[str, Any]]):
         if isinstance(position, dict):
             self._cloud_position = dict(position)
@@ -49,6 +67,10 @@ class PoseRegistry:
             'timestamp_ns': int(timestamp_ns),
         }
         self._gps_history.append(dict(self._gps_position))
+
+    def clear_map_poses(self):
+        self._map_pose_history.clear()
+        self._latest_map_pose = None
 
     def update_map_pose(self, pose: Dict[str, Any]):
         self._latest_map_pose = self._normalize_pose_dict(pose)

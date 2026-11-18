@@ -16,9 +16,9 @@ package imports source from the old workspace.
 | `uran-control-arbiter-plugin` | per-resource control leases | pure state machine |
 | `uran-px4-plugin` | ROS 1/PX4 aerial motion and OFFBOARD-safe setpoints | deterministic simulator |
 | `uran-media-plugin` | media sessions, WebRTC/RTSP and camera adapters | explicit memory simulator |
-| `uran-localization-plugin` | GPS/VO alignment, geo projection and fusion | pure algorithms |
-| `uran-navigation-plugin` | depth scan, obstacle avoidance, safety gate and route follower | pure algorithms |
-| `uran-autotask-plugin` | waypoint/outdoor parsing and mission lifecycle | worker task store |
+| `uran-localization-plugin` | GNSS/map registration, GPS/VO alignment, geo projection and fusion | pure algorithms |
+| `uran-navigation-plugin` | terrain clearance, depth scan, obstacle avoidance, heading control and route following | pure algorithms |
+| `uran-autotask-plugin` | waypoint missions, bounded area exploration and mapped patrol | worker task store |
 | `uran-simulation-plugin` | independent base/dual-arm/gripper components | always simulated |
 | `uran-so101-plugin` | SO101/Feetech arm bus, LeRobot-compatible FK/IK and safety | simulation backend |
 

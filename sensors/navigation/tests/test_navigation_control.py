@@ -478,3 +478,20 @@ def test_straight_drive_resume_uses_remaining_distance_and_duration():
     assert controller.started['distance_m'] == 6.0
     assert controller.started['duration_s'] == 12.0
     assert manager._runtime.stage == 'executing'
+
+
+
+def test_absolute_turn_wraps_the_heading_and_keeps_forward_speed_zero():
+    pose = {'x': 4, 'y': 1, 'yaw_deg': 175, 'age_s': 0}
+    clock, gateway = [0.0], _Gateway()
+    drive = _controller(clock, pose, gateway, goal_confirm_frames=1, turn_tolerance_deg=2)
+    assert drive.start(task_id='inspect', turn_yaw_deg=-170)['accepted']
+    assert drive.tick()['code'] == 'E_SCAN_UNAVAILABLE'
+    clock[0] += 0.1
+    drive.update_scan(_Scan())
+    drive.tick()
+    assert gateway.commands[-1]['linear_x'] == 0 and gateway.commands[-1]['angular_z'] > 0
+    pose['yaw_deg'] = -171
+    clock[0] += 0.1
+    assert drive.tick()['state'] == 'completed'
+    assert gateway.commands[-1]['linear_x'] == gateway.commands[-1]['angular_z'] == 0
