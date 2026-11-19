@@ -85,7 +85,7 @@ start mapping "$laser" --ros-args -r __node:=map_builder -r __ns:="$survey" --pa
 depth_args=(-p depth_image_topic:=camera/depth/image_rect_raw -p depth_camera_info_topic:=camera/depth/camera_info \
     -p ground_frame:=visual_odom -p odom_topic:=visual_odom -p sensor_adapter:=uran_cyberdog2_plugin.map_sensors:bind_tof -p rear_tof_topic:=rear_tof_payload)
 start sensors nice -n 4 "$exe/survey_sensors" --ros-args -r __ns:="$base" "${depth_args[@]}" \
-    -p depth_check_range_m:=1.0 -p depth_disagreement_m:=0.05 -p require_near_lidar_support:=true -p blind_surface_range_m:=0.35 -p unknown_range:=zero -p depth_pixel_stride:=4 -p max_wait_s:=1.1 \
+    -p unknown_range:=zero -p depth_pixel_stride:=4 -p max_wait_s:=1.1 \
     -r map_observations:__node:=survey_observations \
     -r /uran/runtime/dispatch:="${OBSERVATION_TOPIC:-$survey/observations}" -p map_id:="$map_id" -p map_frame:=laser_odom -p pose_topic:="$survey/dog_pose" \
     -p device_id:="${DEVICE_ID:-${base##*/}}" -p component_id:=base -p reference_mode:=local -r survey_observations:scan:="$base/scan_fused" -p depth_rate_hz:=1.5 -p surface_topic:="$survey/surfaces"
