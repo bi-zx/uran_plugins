@@ -3,6 +3,8 @@ import math
 from collections import defaultdict
 
 
+MAPPING_RADIUS_M = 5.0
+
 TERRAIN_DEFAULTS = {
     "body_radius_m": 0.40, "body_height_m": 0.45, "max_step_m": 0.06,
     "max_slope_deg": 15.0, "terrain_range_m": 3.0, "terrain_sample_m": 0.10,
@@ -18,7 +20,7 @@ def terrain_parameters(config):
     return params
 
 
-def terrain_cells(beams, ground_xyz, resolution, config):
+def terrain_cells(beams, ground_xyz, resolution, config, body_xy=None):
     """Each beam group has one optical origin and finite measured XYZ endpoints."""
     params = terrain_parameters(config)
     body_radius, body_height = params["body_radius_m"], params["body_height_m"]
@@ -35,7 +37,10 @@ def terrain_cells(beams, ground_xyz, resolution, config):
 
     for group in beams:
         ox, oy, oz = group["origin"]
+        bx, by = group.get("body_xy", body_xy if body_xy is not None else ground_xyz[:2])
         for x, y, z in group["points"]:
+            if math.hypot(x-bx, y-by) > MAPPING_RADIUS_M:
+                continue
             dx, dy, dz = x-ox, y-oy, z-oz
             distance = math.sqrt(dx*dx + dy*dy + dz*dz)
             if not 0 < distance <= max_range:

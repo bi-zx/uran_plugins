@@ -194,12 +194,19 @@ class SurveyGrid:
             by_row.setdefault(y, []).append(x)
         for columns in by_row.values():
             columns.sort()
-        green, red, fixed = [], [], []
+        green, red, fixed, unverified = [], [], [], []
         unknown = 0
         for y, first, last in fence.rows(self.resolution):
             columns = by_row.get(y, [])
             known = columns[bisect_left(columns, first):bisect_right(columns, last)]
             unknown += last-first+1 - len(known)
+            gap = first
+            for x in known:
+                if gap < x:
+                    unverified.append([y,gap,x-1])
+                gap = x+1
+            if gap <= last:
+                unverified.append([y,gap,last])
             red_start = first
             for x in known:
                 runs = green if self.cells[(x,y)] == CLEAR else fixed
@@ -215,4 +222,4 @@ class SurveyGrid:
                 red.append([y,red_start,last])
         return {"map_id": self.map_id, "frame_id": self.frame_id, "resolution_m": self.resolution,
                 "terrain": self.terrain, "encoding": "row_x_first_x_last", "green": green, "red": red, "fixed_obstacles": fixed,
-                "unverified_area_m2": unknown * self.resolution**2}
+                "unverified": unverified, "unverified_area_m2": unknown * self.resolution**2}

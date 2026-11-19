@@ -159,6 +159,7 @@ def test_exploration_returns_two_masks_with_unknown_and_hole(tmp_path):
     assert red == area - green
     assert decode("fixed_obstacles") == {(0,1),(1,0)}
     assert grid["unverified_area_m2"] == 8
+    assert decode("unverified") == red - decode("fixed_obstacles")
     assert grid["boundary"] == fence
 
 
@@ -397,3 +398,30 @@ def test_crossing_into_a_new_fence_waits_for_ground_at_the_current_pose(tmp_path
     for _ in range(2): terrain(w,clear=[(2,0)])
     m.tick()
     assert m.outcome == "survey_complete" and m.build_status_payload()["map"]["green"] == [[0,2,2]]
+
+
+def test_observation_radius_follows_body_and_preserves_previous_cells(tmp_path):
+    w,m = task(tmp_path,"area_explore",reference_mode="local")
+    pose(w,.5,.5)
+    for _ in range(2): terrain(w,clear=[(0,0),(5,0),(5,1)],walls=[(6,0)])
+    assert m.grid.cells == {(0,0):1,(5,0):1}
+    assert m.seen_bounds == (0,0,5,0)
+    pose(w,6.5,.5)
+    for _ in range(2): terrain(w,clear=[(5,1)],walls=[(6,0),(0,0)])
+    assert m.grid.cells == {(0,0):1,(5,0):1,(5,1):1,(6,0):-1}
+    pos = m.build_status_payload()["position"]
+    assert pos["x"] == 6.5 and pos["fresh"] and "latitude_deg" not in pos
+
+
+def test_delayed_georeference_reports_coordinates_from_map(tmp_path):
+    w,m = task(tmp_path,"area_explore",aligned=False)
+    for x in (0,2,4):
+        stamp=time.time_ns()
+        pose(w,x,1.0,stamp)
+        if x == 0:
+            assert "latitude_deg" not in m.build_status_payload()["position"]
+        lat,lon = PROJECT.map_xy_to_latlon(x,1.0)
+        observe(w,"gps_fix",{"latitude_deg":lat,"longitude_deg":lon,"fix_type":3},stamp)
+    pose(w,5.0,2.0)
+    pos = m.build_status_payload()["position"]
+    assert math.dist((pos["latitude_deg"],pos["longitude_deg"]),PROJECT.map_xy_to_latlon(5,2)) < 1e-7

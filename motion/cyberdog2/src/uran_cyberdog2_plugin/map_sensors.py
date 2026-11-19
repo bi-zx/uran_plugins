@@ -172,10 +172,9 @@ def head_points(part, side):
 
 
 
-def bind_sensors(node):
-    from protocol.msg import HeadTofPayload, GpsPayload
+def bind_tof(node):
+    from protocol.msg import HeadTofPayload
     tof = node.declare_parameter("tof_topic","head_tof_payload").value
-    gps = node.declare_parameter("receiver_topic","").value
     if tof:
         mount_frame = node.declare_parameter("tof_mount_frame","base_link").value
         def on_head(msg):
@@ -193,6 +192,12 @@ def bind_sensors(node):
                 if points is not None and part.header.frame_id:
                     node.queue(part.header.frame_id,(part.header.frame_id,np.zeros(3),points),part.header.stamp)
         node.create_subscription(RearTofPayload,rear_tof,on_rear,qos_profile_sensor_data)
+
+
+def bind_sensors(node):
+    from protocol.msg import GpsPayload
+    bind_tof(node)
+    gps = node.declare_parameter("receiver_topic","").value
     if gps:
         def on_fix(msg):
             if msg.fix_type >= 3:

@@ -3,6 +3,7 @@ import json
 import math
 import time
 
+from uran_navigation_plugin.terrain import MAPPING_RADIUS_M
 from uran_localization_plugin import GnssMapAlignment, PoseRegistry
 from .survey_grid import BLOCKED, CLEAR, UNKNOWN, Fence, SurveyGrid, first_straight_leg, neighbors, path_to, reachable_paths
 from .task_models import TERMINAL_TASK_STAGES, TaskRuntime
@@ -63,6 +64,8 @@ class MapMission:
         self.poses = PoseRegistry()
         self.pose = self.start_xy = None
         self.localization_revision = None
+        self.next_pose_report = 0.0
+        self.report_interval = float(config.get("progress_report_interval_s", 1.0))
         self.pose_timeout = float(config.get("pose_timeout_s", 1.0))
         self.max_pair_delta = float(config.get("pose_pair_tolerance_s", 0.3))
         self.terrain_timeout = float(config.get("terrain_timeout_s", 1.0))
@@ -184,6 +187,11 @@ class MapMission:
                   "pending": [p["waypoint_id"] for p in self.pending],
                   "reference_mode": self.reference_mode, "frame_id": self.grid.frame_id,
                   "georeferenced": bool(self.alignment and self.alignment.projector)}
+        if self.pose:
+            position = dict(self.pose, fresh=self.slam_ready and abs(time.time_ns()-self.pose["timestamp_ns"]) <= self.pose_timeout*1e9)
+            if self.alignment and self.alignment.projector:
+                position["latitude_deg"],position["longitude_deg"] = self.alignment.projector.map_xy_to_latlon(position["x"],position["y"])
+            result["position"] = position
         if self.manage_slam and self.slam_command in ("start","save","stop"):
             result["slam"] = {"operation_id":self.operation_id,"command":self.slam_command,"mode":self.slam_mode}
         if not self.patrol and self.outcome == "survey_complete":
@@ -232,6 +240,10 @@ class MapMission:
         self.poses.update_map_pose(self.pose)
         if self.start_xy is None:
             self.start_xy = (pose["x"], pose["y"])
+        now = time.monotonic()
+        if now >= self.next_pose_report:
+            self.next_pose_report = now + self.report_interval
+            self.progress()
 
     def update_gps(self, gps, stamp):
         if self.local or (self.patrol and self.alignment.projector):
@@ -273,6 +285,9 @@ class MapMission:
         pose = self.poses.nearest_map_pose(timestamp_ns=stamp, max_delta_s=self.max_pair_delta)
         if pose is None:
             return
+        xy = (pose["x"],pose["y"])
+        values = [item for item in values if math.dist((item["x_m"],item["y_m"]),xy) <= MAPPING_RADIUS_M
+                  and math.dist(self.grid.center(self.grid.cell((item["x_m"],item["y_m"]))),xy) <= MAPPING_RADIUS_M]
         labels = {}
         for item in values:
             cell = self.grid.cell((item["x_m"], item["y_m"]))

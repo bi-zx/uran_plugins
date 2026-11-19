@@ -269,6 +269,7 @@ class AutotaskWorker(Worker):
         context = _MissionContext(operation_id, str(command["task_id"]), target, None, gateway, straight)
         if is_map_task:
             mapping_config = dict(self.config.get("mapping") or {})
+            mapping_config.setdefault("progress_report_interval_s", self.config.get("progress_report_interval_s", 1.0))
             data_dir = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
             database = mapping_config.get("map_database", data_dir / "uran" / "maps.sqlite3")
             manager = MapMission(command, mapping_config, database, straight,
@@ -392,7 +393,11 @@ class AutotaskWorker(Worker):
                         manager.update_pose({**value, "yaw_deg": normalized["yaw_deg"]}, timestamp_ns)
                     elif manager.runtime.stage != "paused":
                         if kind == "depth_rays":
-                            cells = terrain_cells(value["beams"], value["ground_xyz"], manager.grid.resolution, manager.terrain_config)
+                            pose = manager.poses.nearest_map_pose(timestamp_ns=timestamp_ns, max_delta_s=manager.max_pair_delta)
+                            if pose is None:
+                                continue
+                            cells = terrain_cells(value["beams"], value["ground_xyz"], manager.grid.resolution,
+                                                  manager.terrain_config, (pose["x"],pose["y"]))
                         else:
                             if (terrain_parameters(value.get("terrain") or {}) != manager.grid.terrain or
                                     value.get("resolution_m", manager.grid.resolution) != manager.grid.resolution):
