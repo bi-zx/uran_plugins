@@ -46,6 +46,7 @@ class StraightDriveController:
         now_ns_getter,
         logger,
         safety_gate=None,
+        turn_clearance=None,
         control_state_getter=None,
         monotonic_getter=None,
     ):
@@ -113,6 +114,8 @@ class StraightDriveController:
         self.command_source = str(cfg.get('command_source', 'straight_drive'))
 
         self._planner = GapAvoidancePlanner(cfg)
+        self.turn_radius_m = self._planner.turn_radius_m
+        self._turn_clearance = turn_clearance
         self._route_follower = RouteFollower(cfg)
         self._velocity_shaper = VelocityShaper(cfg)
         self._safety_gate = safety_gate or MotionSafetyGate(cfg)
@@ -480,8 +483,12 @@ class StraightDriveController:
             )
 
         theta_goal = self._theta_goal(pose)
+        turn_only = self.turn_radius_m is not None and (
+            self._turn_yaw_rad is not None or
+            self._target_x is not None and abs(theta_goal) >= self.turn_in_place_heading_rad
+        )
         decision = self._planner.plan(
-            self._latest_scan,
+            self._latest_scan, turn_only=turn_only, turn_clearance=self._turn_clearance,
             theta_goal=theta_goal,
             stop_distance_m=self._dynamic_stop_distance_m(),
             now_s=now,
@@ -551,8 +558,6 @@ class StraightDriveController:
             speed_cap_mps=safety.get('speed_cap_mps'),
         )
 
-        if decision.state in {'blocked', 'stop'}:
-            self._mark_blocked(now)
         if decision.state == 'blocked':
             vx, wz = self._publish_velocity(
                 0.0,
@@ -562,16 +567,18 @@ class StraightDriveController:
                 monotonic_s=now,
             )
         else:
-            if decision.state != 'stop':
-                self._blocked_since_s = None
             vx, wz = self._publish_velocity(
                 desired_vx,
                 desired_wz,
                 reason=decision.state,
-                force_zero_linear=self._turn_yaw_rad is not None or decision.state == 'stop',
+                force_zero_linear=turn_only or self._turn_yaw_rad is not None or decision.state == 'stop',
                 speed_cap_mps=safety.get('speed_cap_mps'),
-                monotonic_s=now,
+                monotonic_s=now, decision=decision,
             )
+        if decision.state in {'blocked', 'stop'}:
+            self._mark_blocked(now)
+        else:
+            self._blocked_since_s = None
 
         result = {
             'state': decision.state,
@@ -854,7 +861,7 @@ class StraightDriveController:
         if decision.state == 'stop':
             # A selected gap is usable for turning, but it is not a reason to
             # drive forward while the front safety distance is exceeded.
-            if decision.choice is None:
+            if decision.choice is None and self.turn_radius_m is None:
                 return 0.0, 0.0
             return 0.0, _clamp(
                 wz * 0.75,
@@ -1119,6 +1126,7 @@ class StraightDriveController:
         force_zero_linear: bool = False,
         speed_cap_mps: Optional[float] = None,
         monotonic_s: Optional[float] = None,
+        decision=None,
     ) -> tuple:
         now = self._monotonic_getter() if monotonic_s is None else float(monotonic_s)
         if self._last_command_monotonic_s is not None:
@@ -1133,6 +1141,13 @@ class StraightDriveController:
             force_zero_linear=force_zero_linear,
             speed_cap_mps=speed_cap_mps,
         )
+        if decision is not None and self.turn_radius_m is not None and shaped_vx > 0 and abs(shaped_wz) > 1e-8:
+            duration = self.command_latency_s + 1/self.control_hz + shaped_vx/self.brake_decel_mps2
+            if self._planner.footprint_scan.arc_blocked(shaped_vx, shaped_wz, duration):
+                decision.state, decision.reason = 'blocked', 'obstacle on commanded arc'
+                reason = decision.reason
+                shaped_vx, shaped_wz = 0.0, 0.0
+                self._velocity_shaper.reset()
         self._last_vx = float(shaped_vx)
         self._last_wz = float(shaped_wz)
         self._last_command_monotonic_s = now

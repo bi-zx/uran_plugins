@@ -495,3 +495,90 @@ def test_absolute_turn_wraps_the_heading_and_keeps_forward_speed_zero():
     clock[0] += 0.1
     assert drive.tick()['state'] == 'completed'
     assert gateway.commands[-1]['linear_x'] == gateway.commands[-1]['angular_z'] == 0
+
+
+# These dimensions exercise configuration-space boundaries, independent of the platform.
+_RECTANGLE = dict(robot_length_m=0.60, robot_width_m=0.40, safety_margin_m=0.15, turn_radius_m=0.50)
+
+
+def _walled_scan(width):
+    scan = _Scan()
+    for i in range(len(scan.ranges)):
+        sine = abs(math.sin(scan.angle_min + i*scan.angle_increment))
+        scan.ranges[i] = min(10.0, width/(2*sine)) if sine > 0 else 10.0
+    return scan
+
+
+def test_rectangular_corridor_uses_the_clear_width_once_and_keeps_thin_obstacles():
+    planner = GapAvoidancePlanner(_RECTANGLE)
+    for width in (0.70, 0.71):
+        assert planner.plan(_walled_scan(width)).state == 'clear'
+    assert planner.plan(_walled_scan(0.69)).state == 'blocked'
+    across = _walled_scan(0.71)
+    across.ranges[90] = 0.60
+    d = planner.plan(across)
+    assert d.state == 'blocked' and d.front_clearance_m == 0.60
+    cutoff = _Scan()
+    cutoff.ranges[90] = 0.80
+    assert planner.plan(cutoff, stop_distance_m=0.65).state == 'clear'
+    assert planner.plan(cutoff, stop_distance_m=0.90).state != 'clear'
+
+
+def test_turn_checks_the_full_disk_even_if_the_forward_path_is_blocked():
+    planner = GapAvoidancePlanner(_RECTANGLE)
+    full = _Scan([3.0]*360)
+    full.angle_min = -math.pi
+    full.ranges[180] = 0.59
+    full.ranges[0] = 0.51
+    assert planner.plan(full, theta_goal=1.2, turn_only=True).state == 'clear'
+    for i in (0, 90, 180, 270):
+        full.ranges[i] = 0.49
+        d = planner.plan(full, turn_only=True, turn_clearance=lambda radius: '')
+        assert d.state == 'blocked' and 'inside turning radius' in d.reason
+        full.ranges[i] = 0.51
+    full.ranges[0] = math.nan
+    assert 'unobserved' in planner.plan(full, turn_only=True).reason
+    assert planner.plan(full, turn_only=True, turn_clearance=lambda radius: '' if radius == 0.5 else 'wrong radius').state == 'clear'
+
+
+def test_forward_coverage_and_controlled_pivots_use_actual_motion():
+    planner = GapAvoidancePlanner(_RECTANGLE)
+    front = _Scan()
+    front.ranges[106:141] = [math.nan]*35
+    decision = planner.plan(front)
+    assert decision.reason == 'forward corridor has insufficient scan coverage' and decision.scan_quality == 'invalid'
+    pose = dict(x=0.0, y=0.0, yaw_deg=0.0, age_s=0.0)
+    for target in (dict(turn_yaw_deg=90.0), dict(target_x=0.0, target_y=8.0)):
+        clock, gateway = [0.0], _Gateway()
+        ctrl = _controller(clock, pose, gateway, **_RECTANGLE)
+        assert ctrl.start(task_id='pivot', **target)['accepted']
+        full = _Scan([3.0]*360)
+        full.angle_min = -math.pi
+        full.ranges[180] = 0.58
+        ctrl.update_scan(full, monotonic_s=0.0)
+        assert ctrl.tick(monotonic_s=0.0)['wz'] > 0
+        assert gateway.commands[-1]['linear_x'] == 0
+        clock[0] = 0.1
+        full.ranges[359] = 0.49
+        ctrl.update_scan(full, monotonic_s=0.1)
+        assert ctrl.tick(monotonic_s=0.1)['state'] == 'blocked'
+        assert gateway.commands[-1]['linear_x'] == gateway.commands[-1]['angular_z'] == 0
+
+
+def test_avoidance_pivot_requires_rear_clearance_and_curves_check_body_corners():
+    from uran_navigation_plugin.footprint import FootprintScan
+    planner = GapAvoidancePlanner(_RECTANGLE)
+    full = _Scan([3.0]*360)
+    full.angle_min = -math.pi
+    full.ranges[180] = 0.6
+    decision = planner.plan(full)
+    assert decision.state == 'stop' and abs(decision.theta_target) > 0
+    full.ranges[0] = 0.47
+    assert planner.plan(full).reason == 'obstacle inside turning radius'
+    scan = _Scan()
+    i = 148
+    a = scan.angle_min + i*scan.angle_increment
+    scan.ranges[i] = 0.37/math.sin(a)
+    footprint = FootprintScan(scan, 0.0, 0.30, 0.35)
+    assert footprint.corridor(0.0, 0.9, 0.50)[0] > 0.9
+    assert footprint.arc_blocked(0.15, 0.65, 0.8)

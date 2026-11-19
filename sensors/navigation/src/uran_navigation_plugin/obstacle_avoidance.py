@@ -4,6 +4,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from .footprint import FootprintScan
+
 
 def _clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
@@ -122,6 +124,15 @@ class GapAvoidancePlanner:
             self.robot_width_m + 2.0 * self.safety_margin_m,
             float(cfg.get('min_gap_physical_width_m', self.robot_width_m + 2.0 * self.safety_margin_m)),
         )
+        self.half_length_m = None
+        self.turn_radius_m = None
+        self.footprint_scan = None
+        if 'robot_length_m' in cfg:
+            self.half_length_m = float(cfg['robot_length_m']) / 2
+            corner = math.hypot(self.half_length_m, self.robot_width_m / 2)
+            self.turn_radius_m = float(cfg.get('turn_radius_m', corner + self.safety_margin_m))
+            if not (self.half_length_m > 0 and math.isfinite(self.turn_radius_m) and self.turn_radius_m >= corner):
+                raise ValueError('turn_radius_m must enclose the configured rectangular base')
         self.min_valid_ratio = _clamp(float(cfg.get('min_scan_valid_ratio', 0.50)), 0.0, 1.0)
         self.min_front_valid_ratio = _clamp(
             float(cfg.get('min_front_valid_ratio', 0.50)),
@@ -216,6 +227,8 @@ class GapAvoidancePlanner:
         theta_goal: float = 0.0,
         stop_distance_m: Optional[float] = None,
         now_s: Optional[float] = None,
+        turn_only: bool = False,
+        turn_clearance=None,
     ) -> AvoidanceDecision:
         now = time.monotonic() if now_s is None else float(now_s)
         beams = self._preprocess(scan)
@@ -258,12 +271,14 @@ class GapAvoidancePlanner:
         else:
             self._last_scan_quality = 'good'
 
+        stop_distance = max(self.min_stop_distance_m, float(stop_distance_m or 0))
+        if self.half_length_m is not None:
+            self.footprint_scan = FootprintScan(scan, self.angle_offset_rad, self.half_length_m, self.min_gap_physical_width_m / 2)
+            return self._plan_footprint(self.footprint_scan, theta_goal, max(self.half_length_m, stop_distance),
+                                        turn_only, turn_clearance)
+
         blocked = self._build_blocked_mask(beams)
         blocked_ratio = float(sum(1 for item in blocked if item)) / float(len(blocked))
-        stop_distance = self.min_stop_distance_m if stop_distance_m is None else max(
-            self.min_stop_distance_m,
-            float(stop_distance_m),
-        )
 
         if front_clearance <= stop_distance:
             choice = self._choose_gap(
@@ -355,6 +370,51 @@ class GapAvoidancePlanner:
             reason='selected safest local gap',
         )
 
+    def _plan_footprint(self, scan, goal, stop_distance, turn_only, turn_clearance):
+        goal = _normalize_angle(goal)
+        front, observed = scan.corridor(0.0, stop_distance, self.min_front_valid_ratio)
+        if turn_only:
+            blocked = sum(r < self.turn_radius_m for _, _, r in scan.hits)
+        else:
+            blocked = sum(-scan.half_length <= x <= stop_distance and abs(y) < scan.half_width-1e-8
+                          for x,y,_ in scan.hits)
+        detail = dict(front_clearance_m=front, nearest_obstacle_m=scan.nearest,
+                      blocked_ratio=blocked / max(1, scan.valid_count))
+        state, target = 'clear', goal
+        if not turn_only and not observed:
+            self._last_scan_quality = 'invalid'
+            return self._decision(state='blocked', reason='forward corridor has insufficient scan coverage',
+                                  theta_target=0.0, **detail)
+        if not turn_only and front > stop_distance:
+            reach, covered = (front, observed) if abs(goal) < 1e-8 else scan.corridor(goal, stop_distance, self.min_front_valid_ratio)
+            if covered and reach > stop_distance:
+                self._avoid_direction = ''
+                return self._decision(state='clear', reason='goal corridor is clear', theta_target=goal, **detail)
+            # Rotate to observe the requested heading before committing to translation.
+            state = 'stop'
+        elif not turn_only:
+            # Find the closest heading whose post-turn corridor has adequate width.
+            step = max(scan.step, math.radians(3))
+            count = int(min(math.pi/2, self.usable_fov_rad/2) / step)
+            headings = sorted((i*step for i in range(-count, count+1) if i),
+                              key=lambda a: (abs(a-goal), (a > 0) != (self._avoid_direction == 'left')))
+            for heading in headings:
+                clearance, covered = scan.corridor(heading, stop_distance, self.min_front_valid_ratio)
+                if covered and clearance > stop_distance:
+                    state, target = 'stop', heading
+                    break
+            else:
+                return self._decision(state='blocked', reason='obstacle inside forward corridor',
+                                      theta_target=0.0, **detail)
+        blocker = scan.turn_blocker(self.turn_radius_m, turn_clearance)
+        if blocker:
+            if blocker == 'turning disk has unobserved sectors':
+                self._last_scan_quality = 'invalid'
+            return self._decision(state='blocked', reason=blocker, theta_target=0.0, **detail)
+        if state == 'stop':
+            self._avoid_direction = 'left' if target > 0 else 'right'
+        return self._decision(state=state, reason='turning disk is clear', theta_target=target, **detail)
+
     def _decision(self, **kwargs) -> AvoidanceDecision:
         return AvoidanceDecision(
             scan_quality=self._last_scan_quality,
@@ -436,7 +496,7 @@ class GapAvoidancePlanner:
             zero_flags.append(zero_range)
             positive_return_flags.append(positive_return)
 
-        filtered_ranges = self._median_filter(normalized_ranges)
+        filtered_ranges = self._median_filter(normalized_ranges) if self.half_length_m is None else normalized_ranges
         beams_with_validity = []
         for index, value in enumerate(filtered_ranges):
             theta = angle_min + float(index) * angle_increment + self.angle_offset_rad

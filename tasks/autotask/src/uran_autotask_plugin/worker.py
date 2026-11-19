@@ -260,6 +260,7 @@ class AutotaskWorker(Worker):
                                    target_tolerance_final_m=tolerance, goal_pass_margin_m=tolerance)
         straight = StraightDriveController(
             config=straight_config, move_gateway=gateway,
+            turn_clearance=(lambda radius: context.manager.turn_clearance(radius)) if is_map_task else None,
             pose_getter=self.registry.latest_visual_pose,
             map_pose_getter=(lambda: context.manager.pose) if is_map_task else self.registry.latest_map_pose,
             now_ns_getter=time.time_ns, logger=logger,
@@ -410,8 +411,11 @@ class AutotaskWorker(Worker):
                     if (context.target["device_id"] != device_id or not context.manager.has_active_task() or
                             isinstance(context.manager,MapMission) and not context.manager.slam_ready):
                         continue
-                    if isinstance(context.manager, MapMission):
-                        if document.get("frame_id") != self.body_frame or timestamp_ns <= context.manager.last_scan_stamp:
+                    map_task = isinstance(context.manager, MapMission)
+                    if (map_task or context.straight_drive.turn_radius_m is not None) and document.get("frame_id") != self.body_frame:
+                        continue
+                    if map_task:
+                        if timestamp_ns <= context.manager.last_scan_stamp:
                             continue
                         context.manager.last_scan_stamp = timestamp_ns
                         context.manager.scan_usable = any(r > 0 and r >= scan.range_min for r in scan.ranges)

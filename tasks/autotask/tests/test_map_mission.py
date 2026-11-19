@@ -17,11 +17,11 @@ def polygon(x0, y0, x1, y1):
     return {"type": "Polygon", "coordinates": [ring]}
 
 
-def task(tmp_path, kind, *, resurvey=False, points=(), aligned=True, fence=None, order="given", manage=False, reference_mode="geographic", boundary_m=None):
+def task(tmp_path, kind, *, resurvey=False, points=(), aligned=True, fence=None, order="given", manage=False, reference_mode="geographic", boundary_m=None, straight_drive=None):
     w = AutotaskWorker()
     w.configure({"device_id":"dog", "backend":"simulation", "allow_unarbitrated_simulation":True,
                  "state_reporting":False, "mapping":{"map_database":str(tmp_path/"map.sqlite3"), "fence_clearance_m":0.1,"manage_slam":manage},
-                 "straight_drive":{"goal_confirm_frames":1,"goal_latch_s":0.0}})
+                 "straight_drive":{"goal_confirm_frames":1,"goal_latch_s":0.0,**(straight_drive or {})}})
     w.emit_operation = lambda *args: None
     params = {"map_id":"quad","frame_id":"map","resolution_m":1.0,
               "geofence":fence or polygon(0,0,5,4),"resurvey":resurvey,
@@ -425,3 +425,24 @@ def test_delayed_georeference_reports_coordinates_from_map(tmp_path):
     pose(w,5.0,2.0)
     pos = m.build_status_payload()["position"]
     assert math.dist((pos["latitude_deg"],pos["longitude_deg"]),PROJECT.map_xy_to_latlon(5,2)) < 1e-7
+
+
+def test_dev_profile_turn_uses_recent_terrain_outside_the_certified_body_radius(tmp_path):
+    dims = dict(robot_length_m=.6, robot_width_m=.4, safety_margin_m=.15, turn_radius_m=.5)
+    w, m = task(tmp_path,"area_explore",reference_mode="local",straight_drive=dims)
+    pose(w,0.95,0.5)
+    m.phase, m.leg, m.runtime.stage = "explore", [(0,0)], "executing"
+    stamp = time.time_ns()
+    # Near the right grid edge a 50 cm disk extends past the padding of the centre cell.
+    m.live_clear[(0,0)] = stamp
+    assert not m.motion_allowed(0,0.2) and m.waiting_for_clearance
+    m.live_clear[(1,0)] = stamp
+    assert m.motion_allowed(0,0.2)
+    m.closed.add((1,0))
+    assert not m.motion_allowed(0,0.2)
+    m.closed.clear()
+    m.live_clear[(1,0)] = stamp - 2_000_000_000
+    assert not m.motion_allowed(0,0.2)
+    # From the middle the centre cell alone already certifies the whole disk.
+    pose(w,0.5,0.5)
+    assert m.motion_allowed(0,0.2)

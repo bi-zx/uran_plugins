@@ -359,12 +359,44 @@ class MapMission:
             return clearance >= self.return_limit
         return clearance >= self.margin
 
+    def turn_clearance(self, radius):
+        """Confirm the turn disk with recent footprint-expanded terrain observations."""
+        x, y = self.pose["x"], self.pose["y"]
+        if self.phase in ("explore", "patrol") and self.fence.clearance(x, y) < max(radius, self.margin):
+            return "turning disk crosses the mission boundary"
+        # Every green terrain cell certifies its whole area plus body_radius_m.
+        extra = max(0.0, radius - self.grid.terrain["body_radius_m"])
+        size = self.grid.resolution
+        left, bottom = self.grid.cell((x-extra, y-extra))
+        right, top = self.grid.cell((x+extra, y+extra))
+        oldest = time.time_ns() - self.terrain_timeout*1e9
+        unknown = False
+        for ix in range(left, right+1):
+            for iy in range(bottom, top+1):
+                dx = max(ix*size-x, 0.0, x-(ix+1)*size)
+                dy = max(iy*size-y, 0.0, y-(iy+1)*size)
+                if dx*dx + dy*dy > extra*extra:
+                    continue
+                cell = (ix, iy)
+                if cell in self.closed or self.patrol and self.map_located and self._clearance(cell) >= 0 and self.grid.cells.get(cell) != CLEAR:
+                    return "turning disk intersects blocked terrain"
+                if self.live_clear.get(cell, 0) < oldest:
+                    unknown = True
+        if unknown:
+            return "turning disk needs fresh ground clearance"
+        return ""
+
     def motion_allowed(self, vx, wz):
         """Check the commanded arc through the next update and its braking distance."""
         if vx == 0 and wz == 0:
             return True
         if not self.pose or not self.leg or self.runtime.stage != "executing":
             return False
+        if vx == 0 and self.controller.turn_radius_m is not None:
+            blocker = self.turn_clearance(self.controller.turn_radius_m)
+            if blocker:
+                self.waiting_for_clearance = blocker == "turning disk needs fresh ground clearance"
+                return False
         x, y = self.pose["x"], self.pose["y"]
         start = self.grid.cell((x,y))
         yaw = math.radians(self.pose["yaw_deg"])
@@ -562,7 +594,7 @@ class MapMission:
         if not self.leg or not self.controller.is_active():
             return
         result = self.controller.tick()
-        if self.waiting_for_clearance:
+        if self.waiting_for_clearance or result.get("decision", {}).get("reason") == "turning disk needs fresh ground clearance":
             self._halt("waiting_for_ground_clearance")
             self._event("waiting_for_ground_clearance")
             return
