@@ -83,3 +83,16 @@ def test_control_suspend_sends_zero_and_blocks_until_resume():
     assert transport.servo[-1]["vx"] == 0.0
     backend.resume()
     assert backend.execute(MotionCommand(linear_vel_x=0.2)).accepted
+
+
+def test_stop_keeps_fresh_four_foot_stand_and_stops_a_pending_walk():
+    now = [3.0]
+    transport = Transport()
+    backend = CyberDogPolicyBackend(transport, clock=lambda: now[0])
+    backend.update_motion_status(SWITCH_NORMAL,112,15)
+    assert backend.stop().accepted and transport.servo == []
+    backend.execute(MotionCommand(linear_vel_x=0.075))
+    assert backend.stop().accepted and transport.servo[-1]["vx"] == 0.0
+    now[0] += 1
+    transport.servo.clear()
+    assert backend.stop().accepted and transport.servo[-1]["vx"] == 0.0

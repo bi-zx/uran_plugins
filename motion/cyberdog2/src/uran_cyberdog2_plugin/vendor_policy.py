@@ -13,6 +13,7 @@ from .controller import MotionCommand, MotionResult
 
 MOTION_WALK_ADAPTIVELY = 304
 MOTION_RECOVERY_STAND = 111
+MOTION_WALK_STAND = 112
 MOTION_GET_DOWN = 101
 MOTION_ESTOP = 0
 SWITCH_NORMAL = 0
@@ -56,6 +57,7 @@ class CyberDogPolicyBackend:
         self.auto_stand_sent = False
         self.auto_stand_retry_after = 0.0
         self.suspended = False
+        self.standing_stamp = None
         self.last_velocity = {"linear_x": 0.0, "linear_y": 0.0,
                               "linear_z": 0.0, "angular_z": 0.0}
 
@@ -65,8 +67,11 @@ class CyberDogPolicyBackend:
             self._publish_zero()
             return self.transport.motion_result(MOTION_ESTOP)
         if command.action == "stop":
-            self._reset_motion(keep_idle=True)
-            self._publish_zero()
+            standing = (self.last_execute_ts == 0.0 and self.standing_stamp is not None and
+                        self.clock()-self.standing_stamp <= self.cmd_timeout_s)
+            self._reset_motion(keep_idle=not standing)
+            if not standing:
+                self._publish_zero()
             return MotionResult(True, "OK", applied=dict(self.last_velocity))
         if self.suspended:
             return MotionResult(False, "E_BACKEND_SUSPENDED")
@@ -132,8 +137,10 @@ class CyberDogPolicyBackend:
         return MotionResult(False, "E_VENDOR_SWITCH_STATUS",
                             f"switch_status={self.switch_status}")
 
-    def update_motion_status(self, switch_status: int) -> None:
+    def update_motion_status(self, switch_status: int, motion_id=None, contact=None) -> None:
         status = int(switch_status)
+        self.standing_stamp = (self.clock() if status == SWITCH_NORMAL and contact == 15 and
+                               motion_id in (MOTION_RECOVERY_STAND, MOTION_WALK_STAND) else None)
         if status == SWITCH_CHARGING and self._charger_disconnected_timed_out():
             status = SWITCH_NORMAL
         self.switch_status = status

@@ -90,7 +90,7 @@ class CyberDog2Ros2Backend:
         self.battery_level = None
 
     def _on_motion_status(self, message) -> None:
-        self.policy.update_motion_status(int(message.switch_status))
+        self.policy.update_motion_status(int(message.switch_status), int(message.motion_id), int(message.contact))
 
     def _on_bms(self, message) -> None:
         self.battery_level = max(0.0, min(100.0, float(message.batt_soc)))
