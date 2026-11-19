@@ -142,7 +142,7 @@ class LaserSession:
 
 
 # CyberDog2 motion_utils/head_tof_pcl_publisher.py supplies this ray layout and both mounts.
-def head_points(part, side):
+def tof_points(part, rear=False):
     if not part.data_available or len(part.data) != 64:
         return None
     depth = np.asarray(part.data[::-1])
@@ -154,8 +154,16 @@ def head_points(part, side):
     row,col = np.divmod(np.flatnonzero(valid),8)
     angle = angles[np.minimum(row,7-row),np.minimum(col,7-col)]
     dx,dy = 7-2*col,2*row-7
+    if rear:
+        dx,dy = -dx,-dy
     r = depth[valid]*np.tan(np.radians(angle))/np.hypot(dx,dy)
-    xyz = np.column_stack((r*dx,r*dy,-depth[valid]))
+    return np.column_stack((r*dx,r*dy,-depth[valid]))
+
+
+def head_points(part, side):
+    xyz = tof_points(part)
+    if xyz is None:
+        return None
     roll,pitch = side*0.296,-0.266
     cr,sr,cp,sp = math.cos(roll),math.sin(roll),math.cos(pitch),math.sin(pitch)
     rotation = np.array([[cp,sp*sr,sp*cr],[0,cr,-sr],[-sp,cp*sr,cp*cr]])
@@ -169,12 +177,22 @@ def bind_sensors(node):
     tof = node.declare_parameter("tof_topic","head_tof_payload").value
     gps = node.declare_parameter("receiver_topic","").value
     if tof:
+        mount_frame = node.declare_parameter("tof_mount_frame","base_link").value
         def on_head(msg):
             for part,side in ((msg.left_head,1),(msg.right_head,-1)):
                 rays = head_points(part,side)
                 if rays is not None:
-                    node.queue("tof_"+str(side),("robot",rays[0],rays[1]),part.header.stamp)
+                    node.queue("tof_"+str(side),(mount_frame,rays[0],rays[1]),part.header.stamp)
         node.create_subscription(HeadTofPayload,tof,on_head,qos_profile_sensor_data)
+    rear_tof = node.declare_parameter("rear_tof_topic","").value
+    if rear_tof:
+        from protocol.msg import RearTofPayload
+        def on_rear(msg):
+            for part in (msg.left_rear,msg.right_rear):
+                points = tof_points(part,rear=True)
+                if points is not None and part.header.frame_id:
+                    node.queue(part.header.frame_id,(part.header.frame_id,np.zeros(3),points),part.header.stamp)
+        node.create_subscription(RearTofPayload,rear_tof,on_rear,qos_profile_sensor_data)
     if gps:
         def on_fix(msg):
             if msg.fix_type >= 3:
