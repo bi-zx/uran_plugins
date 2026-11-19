@@ -81,13 +81,13 @@ start() {
     pids+=("$!")
 }
 start mapping "$laser" --ros-args -r __node:=map_builder -r __ns:="$survey" --params-file "$room/config/mapping_node.yaml" \
-    -r "$survey/camera/imu:=$base/camera/imu" -r "$survey/visual_odom:=$base/visual_odom" -r "$survey/scan_fused:=$base/scan_fused" -r /tf:="$survey/tf"
+    -r "$survey/camera/imu:=$base/camera/imu" -r "$survey/visual_odom:=$base/visual_odom" -r "$survey/scan:=$base/scan" -r /tf:="$survey/tf"
 depth_args=(-p depth_image_topic:=camera/depth/image_rect_raw -p depth_camera_info_topic:=camera/depth/camera_info \
     -p ground_frame:=visual_odom -p odom_topic:=visual_odom -p sensor_adapter:=uran_cyberdog2_plugin.map_sensors:bind_tof -p rear_tof_topic:=rear_tof_payload)
 start sensors nice -n 4 "$exe/survey_sensors" --ros-args -r __ns:="$base" "${depth_args[@]}" \
     -p unknown_range:=zero -p depth_pixel_stride:=4 -p max_wait_s:=1.1 \
     -r map_observations:__node:=survey_observations \
-    -r /uran/runtime/dispatch:="${OBSERVATION_TOPIC:-$survey/observations}" -p map_id:="$map_id" -p map_frame:=laser_odom -p pose_topic:="$survey/dog_pose" \
+    -r /uran/runtime/dispatch:="${OBSERVATION_TOPIC:-$survey/observations}" -p map_id:="$map_id" -p map_frame:=laser_odom -p pose_topic:="$survey/dog_pose" -p pose_includes_odometry:=true \
     -p device_id:="${DEVICE_ID:-${base##*/}}" -p component_id:=base -p reference_mode:=local -r survey_observations:scan:="$base/scan" -p terrain_max_age_s:=1.0 -p depth_rate_hz:=1.5 -p surface_topic:="$survey/surfaces"
 start grid nice -n 4 "$exe/survey_map" --ros-args -r __ns:="$survey" -p map_id:="$map_id" -p scan_topic:="$base/scan_fused" -p pose_topic:=dog_pose \
     -p map_frame:=laser_odom -p coverage_file:="$room/coverage.sqlite" -p surface_topic:="$survey/surfaces"

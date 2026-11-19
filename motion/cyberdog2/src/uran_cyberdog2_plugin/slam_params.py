@@ -11,7 +11,7 @@ def main():
     parser.add_argument("output_dir",type=Path)
     parser.add_argument("map_dir",type=Path)
     parser.add_argument("--namespace",default="",help="Fully qualify node keys for direct executable launch")
-    parser.add_argument("--scan-topic",default="scan_fused",help="Topic relative to the vendor node namespace")
+    parser.add_argument("--scan-topic",default="scan",help="Topic relative to the vendor node namespace")
     parser.add_argument("--odom-topic",help="Odometry topic relative to the vendor node namespace")
     parser.add_argument("--skip-correlative-search",action="store_true",help="Start local scan matching at the predicted pose when mapping")
     args = parser.parse_args()
@@ -25,7 +25,7 @@ def main():
         node = next(iter(doc))
         params = doc[node]["ros__parameters"]
         params.update(laser_scan_topic="/"+args.scan_topic.strip("/"),frame_id="laser_odom",
-                      missing_data_ray_length=0.0,map_save_path=str(dest)+"/",
+                      max_range=5.0,missing_data_ray_length=0.0,map_save_path=str(dest)+"/",
                       pose_save_path=str(dest/Path(params["pose_save_path"]).name))
         if args.odom_topic:
             params["odometry_topic"] = "/"+args.odom_topic.strip("/")
