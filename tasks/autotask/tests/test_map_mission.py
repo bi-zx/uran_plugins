@@ -604,3 +604,73 @@ def test_new_hit_at_body_side_and_thin_object_within_an_otherwise_clear_tile():
     assert h.straight((0,0,0),.3,.35,.06,21)=="blocked"
     add(.34,.02,0.,26)
     assert h.straight((0,0,0),.3,.35,.06,21)=="clear"
+
+
+def test_active_straight_motion_bridges_a_delayed_view_but_not_an_outage(tmp_path,monkeypatch):
+    dims = dict(robot_length_m=.6,robot_width_m=.4,safety_margin_m=.15,turn_radius_m=.5,
+                max_speed_mps=.15,default_speed_mps=.15)
+    w,m = task(tmp_path,"area_explore",reference_mode="local",straight_drive=dims)
+    start = time.time_ns()
+    now = [start]
+    monkeypatch.setattr(time,"time_ns",lambda: now[0])
+    monkeypatch.setattr(time,"monotonic",lambda: (now[0]-start)/1e9)
+    m.controller._monotonic_getter = time.monotonic
+    def sensors(t):
+        now[0] = start+round(t*1e9)
+        observe(w,"map_pose",dict(map_id="quad",x=0.,y=0.,yaw_deg=0.,odometry_fused=True,
+                support_state="standing",support_stamp_ns=now[0]),now[0])
+        scan(w,now[0])
+    groups = [dict(origin=[.1,y,.45], points=[[.33,y,0.]]) for y in (0.,-.3,-.2,-.1,.1,.2,.3)]
+    groups += [dict(origin=[.10,y,z],points=[[.9,y,z]]) for y in (0.,-.3,-.2,-.1,.1,.2,.3) for z in (.08,.15,.25,.35,.425)]
+    terrain_input = dict(map_id="quad",ground_xyz=[0.,0.,0.],beams=groups)
+    sensors(0.)
+    sensors(.65)
+    observe(w,"depth_rays",terrain_input,start)
+    m.tick(); m.tick_control()
+    assert m.probing and m.controller.snapshot()["last_vx"]>0
+    sensors(1.05)
+    m.tick(); m.tick_control()
+    assert m.controller.snapshot()["last_vx"]>0, "registered straight corridor was interrupted by transport delay"
+    assert not m.motion_allowed(0.,.25)
+    sensors(1.70)
+    observe(w,"depth_rays",terrain_input,start)
+    m.tick(); m.tick_control()
+    assert m.controller.snapshot()["last_vx"]==0 and m.runtime.event=="waiting_for_terrain"
+
+
+def test_flat_corridor_keeps_moving_between_delayed_depth_updates(tmp_path,monkeypatch):
+    dims = dict(robot_length_m=.6,robot_width_m=.4,safety_margin_m=.15,turn_radius_m=.5,
+                max_speed_mps=.15,default_speed_mps=.15)
+    w,m = task(tmp_path,"area_explore",reference_mode="local",straight_drive=dims)
+    start = time.time_ns()
+    elapsed = [0.]
+    monkeypatch.setattr(time,"time_ns",lambda: start+round(elapsed[0]*1e9))
+    monkeypatch.setattr(time,"monotonic",lambda: elapsed[0])
+    m.controller._monotonic_getter = time.monotonic
+    sampled = {}
+    x = speed = 0.
+    commands = []
+    for i in range(128):
+        elapsed[0] = i/10
+        x += speed*.1
+        stamp = time.time_ns()
+        observe(w,"map_pose",dict(map_id="quad",x=x,y=0.,yaw_deg=0.,odometry_fused=True,
+                support_state="walking" if speed else "standing",support_stamp_ns=stamp),stamp)
+        scan(w,stamp)
+        if i%7==0:
+            groups = []
+            for lane in range(-3,4):
+                y = lane*.1
+                groups.append(dict(origin=[x+.1,y,.42],points=[[x+d*.025,y,0.] for d in range(12,77)]))
+                for z in (.08,.15,.25,.35,.425):
+                    groups.append(dict(origin=[x+.1,y,z],points=[],free_ends=[[x+2.,y,z]]))
+            sampled[i+5] = stamp,dict(map_id="quad",ground_xyz=[x,0.,0.],beams=groups)
+        if i in sampled:
+            acquired,value = sampled.pop(i)
+            observe(w,"depth_rays",value,acquired)
+        m.tick()
+        m.tick_control()
+        speed = m.controller.snapshot()["last_vx"]
+        commands.append(speed)
+    first = next(i for i,v in enumerate(commands) if v>0)
+    assert all(v>0 for v in commands[first:]) and x>1.5

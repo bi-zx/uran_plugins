@@ -68,6 +68,8 @@ class MapMission:
         self.revision_start = 0
         self.surfaces = SweptTerrain(self.grid.terrain) if controller.half_length_m is not None else None
         self.supported = False
+        self.forward_view = None
+        self.forward_motion = False
         self.support_stamp = None
         self.external_closed = set()
         self.probing = False
@@ -123,6 +125,7 @@ class MapMission:
             self.progress()
 
     def _halt(self, reason):
+        self.forward_motion = False
         if self.controller.is_active():
             self.controller.stop(reason=reason)
         self.leg = []
@@ -254,6 +257,7 @@ class MapMission:
             if self.surfaces is not None:
                 self.surfaces = SweptTerrain(self.grid.terrain)
             self.supported, self.support_stamp = False, None
+            self.forward_view = None
             self.external_closed.clear()
             self.probe_views.clear()
             self.wall_views.clear()
@@ -330,11 +334,12 @@ class MapMission:
         else:
             self.grid.save(changed,reference)
 
-    def update_terrain(self, values, stamp, frames=None):
+    def update_terrain(self, values, stamp, frames=None, groups=()):
         if frames and self.surfaces is not None:
             for frame in sorted(frames,key=lambda f:f.stamp):
                 if frame.stamp >= self.revision_start:
                     self.surfaces.merge(frame)
+            self._record_forward_view(groups, stamp)
         if stamp <= self.last_terrain_stamp:
             return
         pose = self.poses.nearest_map_pose(timestamp_ns=stamp, max_delta_s=self.max_pair_delta)
@@ -400,6 +405,55 @@ class MapMission:
             self.survey_evidence.update(evidence)
             self._commit(evidence)
 
+    def _record_forward_view(self, groups, stamp):
+        # Age the sensor at acquisition, and the stream at reception. Only a timely
+        # registered return ahead of the body can provide the latter timestamp.
+        now = time.time_ns()
+        for group in groups:
+            acquired = group.get("timestamp_ns",stamp)
+            if not 0 <= now-acquired <= self.terrain_timeout*1e9 or (self.forward_view and acquired <= self.forward_view[0]):
+                continue
+            pose = self.poses.nearest_map_pose(timestamp_ns=acquired,max_delta_s=self.max_pair_delta)
+            if pose is None:
+                continue
+            x,y,yaw = pose["x"],pose["y"],math.radians(pose["yaw_deg"])
+            c,s = math.cos(yaw),math.sin(yaw)
+            for px,py,_ in group["points"]:
+                dx,dy = px-x,py-y
+                if (dx*c+dy*s >= self.controller.half_length_m and abs(dy*c-dx*s) <= self.controller.corridor_half_width_m
+                        and math.hypot(dx,dy) <= self.surfaces.range):
+                    self.forward_view = (acquired,now,x,y,yaw)
+                    break
+
+    def _can_continue_straight(self, now):
+        if not self.forward_motion or not self.forward_view or not self._use_sweep():
+            return False
+        acquired,received,x,y,yaw = self.forward_view
+        if not (acquired <= received <= now <= received+self.terrain_timeout*1e9):
+            return False
+        px,py,angle = self._metric_pose()
+        length,width = self.controller.half_length_m,self.controller.corridor_half_width_m
+        speed = self.controller.max_speed_mps
+        braking = speed*self._braking_time(speed)
+        dx,dy = px-x,py-y
+        along = dx*math.cos(yaw)+dy*math.sin(yaw)
+        across = dy*math.cos(yaw)-dx*math.sin(yaw)
+        turn = (angle-yaw+math.pi)%(2*math.pi)-math.pi
+        corner_shift = 2*math.hypot(length,width)*abs(math.sin(turn/2))
+        if math.hypot(dx,dy)+corner_shift <= braking:
+            return True
+        if abs(across)+corner_shift > braking or not 0 <= along <= speed*(now-acquired)*1e-9+braking:
+            return False
+        # Check successive braking strips between the observed and current pose.
+        # The command itself checks the final strip. Never bridge sideways or turn.
+        steps = math.ceil(abs(along)/braking)
+        for i in range(steps):
+            t = i/steps
+            pose = x+t*dx,y+t*dy,yaw+t*turn
+            if self.surfaces.straight(pose,length,width,braking,acquired) != "clear":
+                return False
+        return True
+
     def _use_sweep(self):
         return (self.surfaces is not None and self.supported and self.surfaces.measured and
                 abs(time.time_ns()-self.support_stamp) <= self.pose_timeout*1e9)
@@ -414,9 +468,11 @@ class MapMission:
         # Use the cruise-speed horizon during acceleration as well. A millimetre-wide
         # first command cannot give a representative ground sample across the corridor.
         speed = vx if wz else math.copysign(self.controller.max_speed_mps,vx)
+        recent = time.time_ns()-int(self.terrain_timeout*1e9)
+        if self.forward_view and self.last_terrain_stamp < recent:
+            recent = min(recent,self.forward_view[0])
         return self.surfaces.sweep(self._metric_pose(),self.controller.half_length_m,
-                                   self.controller.corridor_half_width_m,speed,wz,self._braking_time(speed),
-                                   time.time_ns()-int(self.terrain_timeout*1e9))
+                                   self.controller.corridor_half_width_m,speed,wz,self._braking_time(speed),recent)
 
     def _walkable(self, cell, phase):
         if cell in self.closed:
@@ -474,9 +530,15 @@ class MapMission:
     def motion_allowed(self, vx, wz):
         """Check the commanded arc through the next update and its braking distance."""
         if vx == 0 and wz == 0:
+            self.forward_motion = False
             return True
         if not self.pose or not self.leg or self.runtime.stage != "executing":
             return False
+        now = time.time_ns()
+        if self.last_terrain_stamp and self.terrain_timeout > 0 and now-self.last_terrain_stamp > self.terrain_timeout*1e9:
+            if vx <= 0 or wz or not self._can_continue_straight(now):
+                self.waiting_for_clearance = True
+                return False
         if vx == 0 and self.controller.turn_radius_m is not None:
             blocker = self.turn_clearance(self.controller.turn_radius_m)
             if blocker:
@@ -485,7 +547,6 @@ class MapMission:
         x, y = self.pose["x"], self.pose["y"]
         start = self.grid.cell((x,y))
         yaw = math.radians(self.pose["yaw_deg"])
-        now = time.time_ns()
         fine = self._use_sweep()
         if self.probing and not fine:
             self.waiting_for_clearance = True
@@ -518,6 +579,7 @@ class MapMission:
                 minimum = self.return_limit if self.phase == "return" else self.margin
                 if self.fence.clearance(x,y) < minimum:
                     return False
+        self.forward_motion = vx > 0 and wz == 0
         return True
 
     def _next_phase(self, xy):
@@ -628,6 +690,8 @@ class MapMission:
                                        (self.last_terrain_stamp, self.terrain_timeout, "waiting_for_terrain"),
                                        (self.last_scan_stamp if self.scan_usable else 0, self.controller.scan_timeout_s, "waiting_for_laser_scan")):
             if not stamp or (timeout > 0 and abs(now-stamp) > timeout*1e9):
+                if reason == "waiting_for_terrain" and self._can_continue_straight(now):
+                    continue
                 self._hold(reason)
                 self.inputs_missing = True
                 return
@@ -741,7 +805,7 @@ class MapMission:
             self._hold("waiting_for_ground_clearance")
             return
         if self.motion_denied or result.get("reason") == "obstacle blocked timeout":
-            if self.probing:
+            if self.probing and self._straight_clearance(self.controller.max_speed_mps,0) != "blocked":
                 heading = (int(math.floor((self.pose["yaw_deg"]+45)/90))*90+180)%360-180
                 self.probe_views.add((self.leg[0],heading))
             current = self.grid.cell((self.pose["x"], self.pose["y"]))

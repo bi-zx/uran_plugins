@@ -434,7 +434,7 @@ class AutotaskWorker(Worker):
             with self.lock:
                 if (manager.has_active_task() and manager.slam_ready and manager.runtime.stage != "paused"
                         and manager.localization_revision == revision):
-                    manager.update_terrain(cells, timestamp_ns, frames)
+                    manager.update_terrain(cells, timestamp_ns, frames, groups)
         return {"status": "succeeded", "operation_id": request["operation_id"],
                 "payload": {"observation_type": kind, "updated": True}}
 
