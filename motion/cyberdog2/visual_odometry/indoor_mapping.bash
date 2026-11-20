@@ -80,8 +80,9 @@ start() {
     setsid "$@" 9>&- </dev/null >"$room/log/$name.log" 2>&1 &
     pids+=("$!")
 }
+start sync "$exe/scan_imu_sync" --ros-args -r __ns:="$survey" -r "scan:=$base/scan" -r "imu:=$base/camera/imu"
 start mapping "$laser" --ros-args -r __node:=map_builder -r __ns:="$survey" --params-file "$room/config/mapping_node.yaml" \
-    -r "$survey/camera/imu:=$base/camera/imu" -r "$survey/visual_odom:=$base/visual_odom" -r "$survey/scan:=$base/scan" -r /tf:="$survey/tf"
+    -r "$survey/camera/imu:=$base/camera/imu" -r "$survey/visual_odom:=$base/visual_odom" -r "$survey/scan:=$survey/scan_synchronized" -r /tf:="$survey/tf"
 depth_args=(-p depth_image_topic:=camera/depth/image_rect_raw -p depth_camera_info_topic:=camera/depth/camera_info \
     -p ground_frame:=odom -p odom_topic:=odom_out -p odom_body_alias:=base_link_leg -p use_odometry_ground_plane:=true \
     -p planar_pose_topic:="$survey/dog_pose" -p sensor_adapter:=uran_cyberdog2_plugin.map_sensors:bind_tof -p rear_tof_topic:=rear_tof_payload)
@@ -96,7 +97,7 @@ python3 - "$base" "$survey" <<'PY'
 import sys,time,rclpy
 from lifecycle_msgs.srv import ChangeState
 base,survey=sys.argv[1:];rclpy.init(args=[]);n=rclpy.create_node('start_visual_survey')
-need={('fused_scan',base),('survey_observations',base),('survey_map',survey),('map_builder',survey)}
+need={('fused_scan',base),('survey_observations',base),('survey_map',survey),('map_builder',survey),('scan_imu_sync',survey)}
 end=time.monotonic()+40
 while time.monotonic()<end:
     if need.issubset(n.get_node_names_and_namespaces()):break
