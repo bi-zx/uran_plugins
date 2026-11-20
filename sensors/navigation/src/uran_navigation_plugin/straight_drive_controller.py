@@ -114,6 +114,9 @@ class StraightDriveController:
         self.command_source = str(cfg.get('command_source', 'straight_drive'))
 
         self._planner = GapAvoidancePlanner(cfg)
+        self.half_length_m = self._planner.half_length_m
+        self.body_half_width_m = self._planner.robot_width_m / 2
+        self.corridor_half_width_m = self._planner.min_gap_physical_width_m / 2
         self.turn_radius_m = self._planner.turn_radius_m
         self._turn_clearance = turn_clearance
         self._route_follower = RouteFollower(cfg)
@@ -849,6 +852,8 @@ class StraightDriveController:
             angular = self.heading_kp * self._theta_goal(pose)
             return 0.0, _clamp(angular, -self.max_angular_speed_radps, self.max_angular_speed_radps)
         theta = _normalize_angle(float(decision.theta_target))
+        if self._goal_kind == "frontier" and decision.state == "clear" and abs(theta) <= self.turn_tolerance_rad:
+            theta = 0.0
         abs_theta = abs(theta)
         wz = _clamp(
             self.heading_kp * theta,

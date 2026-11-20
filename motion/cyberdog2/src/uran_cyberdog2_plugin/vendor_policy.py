@@ -21,6 +21,15 @@ SWITCH_ESTOP = 2
 SWITCH_CHARGING = 14
 
 
+def support_state(status, motion_id, contact):
+    if status == SWITCH_NORMAL:
+        if contact == 15 and motion_id in (MOTION_RECOVERY_STAND, MOTION_WALK_STAND):
+            return "standing"
+        if motion_id == MOTION_WALK_ADAPTIVELY:
+            return "walking"
+    return "unsupported"
+
+
 class VendorTransport(Protocol):
     def publish_servo(self, *, vx: float, vy: float, wz: float,
                       roll: float = 0.0, pitch: float = 0.0) -> None: ...
@@ -139,8 +148,7 @@ class CyberDogPolicyBackend:
 
     def update_motion_status(self, switch_status: int, motion_id=None, contact=None) -> None:
         status = int(switch_status)
-        self.standing_stamp = (self.clock() if status == SWITCH_NORMAL and contact == 15 and
-                               motion_id in (MOTION_RECOVERY_STAND, MOTION_WALK_STAND) else None)
+        self.standing_stamp = (self.clock() if support_state(status,motion_id,contact) == "standing" else None)
         if status == SWITCH_CHARGING and self._charger_disconnected_timed_out():
             status = SWITCH_NORMAL
         self.switch_status = status

@@ -85,7 +85,7 @@ start mapping "$laser" --ros-args -r __node:=map_builder -r __ns:="$survey" --pa
     -r "$survey/camera/imu:=$base/camera/imu" -r "$survey/visual_odom:=$base/visual_odom" -r "$survey/scan:=$survey/scan_synchronized" -r /tf:="$survey/tf"
 depth_args=(-p depth_image_topic:=camera/depth/image_rect_raw -p depth_camera_info_topic:=camera/depth/camera_info \
     -p ground_frame:=odom -p odom_topic:=odom_out -p odom_body_alias:=base_link_leg -p use_odometry_ground_plane:=true \
-    -p planar_pose_topic:="$survey/dog_pose" -p sensor_adapter:=uran_cyberdog2_plugin.map_sensors:bind_tof -p rear_tof_topic:=rear_tof_payload)
+    -p planar_pose_topic:="$survey/dog_pose" -p sensor_adapter:=uran_cyberdog2_plugin.map_sensors:bind_sensors -p rear_tof_topic:=rear_tof_payload)
 start sensors nice -n 4 "$exe/survey_sensors" --ros-args -r __ns:="$base" "${depth_args[@]}" \
     -p unknown_range:=zero -p depth_pixel_stride:=4 -p max_wait_s:=1.1 \
     -r map_observations:__node:=survey_observations \

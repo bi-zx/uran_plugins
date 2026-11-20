@@ -6,3 +6,5 @@ __pycache__/
 build/
 dist/
 install/
+sensors/navigation/src/uran_navigation_plugin/_terrain_rays*.so
+sensors/navigation/src/uran_navigation_plugin/_terrain_rays*.pyd

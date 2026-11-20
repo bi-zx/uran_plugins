@@ -397,12 +397,15 @@ class AutotaskWorker(Worker):
                     if kind in {"map_pose", "slam_pose"}:
                         normalized = self.registry.latest_map_pose()
                         manager.update_pose({**value, "yaw_deg": normalized["yaw_deg"]}, timestamp_ns)
-                    elif manager.runtime.stage != "paused":
+                    elif (manager.runtime.stage != "paused" and timestamp_ns >= manager.revision_start and
+                          value.get("localization_revision",manager.localization_revision) == manager.localization_revision):
                         if kind == "depth_rays":
                             pose = manager.poses.nearest_map_pose(timestamp_ns=timestamp_ns, max_delta_s=manager.max_pair_delta)
                             if pose is None:
                                 continue
-                            projections.append((manager, manager.localization_revision, (pose["x"],pose["y"])))
+                            groups = [g for g in value["beams"] if manager.revision_start <= g.get("timestamp_ns",timestamp_ns) <= timestamp_ns]
+                            if groups:
+                                projections.append((manager, manager.localization_revision, (pose["x"],pose["y"]),groups))
                         elif (terrain_parameters(value.get("terrain") or {}) == manager.grid.terrain and
                               value.get("resolution_m", manager.grid.resolution) == manager.grid.resolution):
                             manager.update_terrain(value["cells"], timestamp_ns)
@@ -423,12 +426,15 @@ class AutotaskWorker(Worker):
                     context.straight_drive.update_scan(scan)
             elif not position_recorded:
                 raise ValueError(f"unsupported task observation_type: {kind}")
-        for manager, revision, body in projections:
-            cells = terrain_cells(value["beams"], value["ground_xyz"], manager.grid.resolution, manager.terrain_config, body)
+        for manager, revision, body, groups in projections:
+            history = manager.surfaces
+            frames = ([history.project(g,g.get("ground_xyz",value["ground_xyz"]),body,g.get("timestamp_ns",timestamp_ns))
+                       for g in groups] if history is not None else [])
+            cells = terrain_cells(groups, value["ground_xyz"], manager.grid.resolution, manager.terrain_config, body)
             with self.lock:
                 if (manager.has_active_task() and manager.slam_ready and manager.runtime.stage != "paused"
                         and manager.localization_revision == revision):
-                    manager.update_terrain(cells, timestamp_ns)
+                    manager.update_terrain(cells, timestamp_ns, frames)
         return {"status": "succeeded", "operation_id": request["operation_id"],
                 "payload": {"observation_type": kind, "updated": True}}
 

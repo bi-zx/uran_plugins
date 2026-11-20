@@ -532,3 +532,75 @@ def test_exploration_speed_cap_stale_data_and_drop(tmp_path,monkeypatch):
     assert velocities[-45:]==[0.]*45 and not m.leg
     assert all(step(drop=True)==0 for _ in range(3))
     assert m.has_active_task() and m.runtime.event=="current_footprint_obstructed"
+
+
+def test_exploration_uses_a_registered_view_and_new_hazards_veto_it(tmp_path):
+    dims = dict(robot_length_m=.6,robot_width_m=.4,safety_margin_m=.15,turn_radius_m=.5,
+                max_speed_mps=.15,default_speed_mps=.15)
+    w,m = task(tmp_path,"area_explore",reference_mode="local",straight_drive=dims)
+    t = time.time_ns()-180_000_000
+    def supported(x,stamp,revision=0):
+        observe(w,"map_pose",dict(map_id="quad",x=x,y=0.,yaw_deg=0.,odometry_fused=True,
+                support_state="standing",support_stamp_ns=stamp,localization_revision=revision),stamp)
+    def rays(groups,stamp,revision=0):
+        observe(w,"depth_rays",dict(map_id="quad",ground_xyz=[0.,0.,0.],beams=groups,localization_revision=revision),stamp)
+    ground, air = [], []
+    for i in range(7):
+        y = (i-3)*.10
+        ground.append(dict(origin=[.1,y,.03],points=[[.33,y,0.]]))
+        for z in (.08,.15,.25,.35,.425):
+            air.append(dict(origin=[.10,y,z],points=[[.9,y,z]]))
+    supported(-.5,t)
+    rays(ground,t)
+    supported(0.,t+50_000_000)
+    scan(w)
+    m.tick()
+    assert m._straight_clearance(.15,0)=="unknown" and not m.goal_xy
+    rays(air,t+60_000_000)
+    m.tick()
+    m.tick_control()
+    assert m.probing and m.controller.snapshot()["last_vx"]>0 and not m.grid.cells
+    assert m.turn_clearance(.5), "a clear front does not certify the turn disk"
+    stamp=t+80_000_000
+    rays([dict(origin=[.1,0,.2],points=[[.34,0,.18]])],stamp)
+    assert not m.motion_allowed(.1,0)
+    rays(ground+air,t+65_000_000)
+    assert not m.motion_allowed(.1,0), "a delayed clear frame erased a newer obstacle"
+    supported(0.,t+100_000_000,1)
+    rays(ground+air,t+90_000_000,0)
+    rays([dict(g,timestamp_ns=t+90_000_000) for g in ground+air],t+110_000_000,1)
+    assert not m.surfaces.measured and m._straight_clearance(.15,0)=="unknown"
+    rays(ground+air,t+120_000_000,1)
+    assert m._straight_clearance(.15,0)=="clear"
+    rays([dict(origin=[.1,0,.2],points=[[.34,0,-.12]])],t+130_000_000,1)
+    assert m._straight_clearance(.15,0)=="blocked"
+
+
+def test_open_ray_stops_at_body_radius_and_never_supplies_a_floor():
+    from uran_navigation_plugin.swept_terrain import SweptTerrain
+    from uran_navigation_plugin.terrain import terrain_parameters
+    h = SweptTerrain(terrain_parameters(dict(terrain_range_m=7.0)))
+    for i,z in enumerate((0.,.08,.15,.25,.35,.425),1):
+        h.merge(h.project(dict(origin=[.2,0,z],points=[],free_ends=[[9.,0,z]]),[0,0,0],[0,0],i))
+    assert h.straight((.5,0,0),.3,.025,.06)=="unknown"
+    group=dict(origin=[.2,0,.03],points=[[.83,0,0],[5.2,0,0]])
+    h.merge(h.project(group,[0,0,0],[0,0],8))
+    assert h.straight((.5,0,0),.3,.025,.06)=="clear"
+    assert h.straight((4.85,0,0),.3,.025,.1)=="unknown"
+
+
+def test_new_hit_at_body_side_and_thin_object_within_an_otherwise_clear_tile():
+    from uran_navigation_plugin.swept_terrain import SweptTerrain
+    from uran_navigation_plugin.terrain import terrain_parameters
+    h=SweptTerrain(terrain_parameters({}))
+    def add(x,y,z,stamp,origin_z=.6):
+        h.merge(h.project(dict(origin=[x,y,origin_z],points=[[x,y,z]]),[0,0,0],[0,0],stamp))
+    for i in range(7): add(.33,(i-3)*.1,0.,10+i)
+    assert h.straight((0,0,0),.3,.35,.06,10)=="clear"
+    add(.25,.32,.12,20)
+    assert h.straight((0,0,0),.3,.35,.06,19)=="blocked"
+    add(.34,.02,.15,22)
+    add(.32,.08,0.,24)
+    assert h.straight((0,0,0),.3,.35,.06,21)=="blocked"
+    add(.34,.02,0.,26)
+    assert h.straight((0,0,0),.3,.35,.06,21)=="clear"

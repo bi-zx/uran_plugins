@@ -195,8 +195,18 @@ def bind_tof(node):
 
 
 def bind_sensors(node):
-    from protocol.msg import GpsPayload
+    from protocol.msg import GpsPayload, MotionStatus
+    from .vendor_policy import support_state
     bind_tof(node)
+    if not hasattr(node,"base_support"):
+        return
+    motion = node.declare_parameter("support_topic","motion_status").value
+    if motion:
+        def on_motion(msg):
+            # MotionStatus has no header. Timestamp it on receipt.
+            node.base_support = (node.get_clock().now().nanoseconds,
+                                 support_state(msg.switch_status,msg.motion_id,msg.contact))
+        node.create_subscription(MotionStatus,motion,on_motion,qos_profile_sensor_data)
     gps = node.declare_parameter("receiver_topic","").value
     if gps:
         def on_fix(msg):

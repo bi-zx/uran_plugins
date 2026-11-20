@@ -4,6 +4,7 @@ import math
 import time
 
 from uran_navigation_plugin.terrain import MAPPING_RADIUS_M
+from uran_navigation_plugin.swept_terrain import SweptTerrain
 from uran_localization_plugin import GnssMapAlignment, PoseRegistry
 from .survey_grid import BLOCKED, CLEAR, UNKNOWN, Fence, SurveyGrid, first_straight_leg, neighbors, path_to, reachable_paths
 from .task_models import TERMINAL_TASK_STAGES, TaskRuntime
@@ -64,6 +65,13 @@ class MapMission:
         self.poses = PoseRegistry()
         self.pose = self.start_xy = None
         self.localization_revision = None
+        self.revision_start = 0
+        self.surfaces = SweptTerrain(self.grid.terrain) if controller.half_length_m is not None else None
+        self.supported = False
+        self.support_stamp = None
+        self.external_closed = set()
+        self.probing = False
+        self.probe_views = set()
         self.next_pose_report = 0.0
         self.report_interval = float(config.get("progress_report_interval_s", 1.0))
         self.pose_timeout = float(config.get("pose_timeout_s", 1.0))
@@ -118,6 +126,7 @@ class MapMission:
         if self.controller.is_active():
             self.controller.stop(reason=reason)
         self.leg = []
+        self.probing = False
         self.goal_xy = self.inspection = None
         self.motion_denied = self.waiting_for_clearance = False
         self.inputs_missing = False
@@ -237,8 +246,27 @@ class MapMission:
         if not all(map(math.isfinite, pose.values())) or (self.pose and stamp <= self.pose["timestamp_ns"]):
             return
         revision = value.get("localization_revision",0)
+        if self.localization_revision is None and revision:
+            self.revision_start = stamp
         if self.localization_revision is not None and revision != self.localization_revision:
             self._halt("map_relocalized")
+            self.revision_start = stamp
+            if self.surfaces is not None:
+                self.surfaces = SweptTerrain(self.grid.terrain)
+            self.supported, self.support_stamp = False, None
+            self.external_closed.clear()
+            self.probe_views.clear()
+            self.wall_views.clear()
+            self.probed.clear()
+            self.seen_bounds = None
+            self.observed.clear()
+            self.survey_evidence.clear()
+            if self.original_states:
+                if self.manage_slam and self.slam_mode == "mapping":
+                    self.grid.apply(self.original_states,self.grid.reference_json)
+                else:
+                    self.grid.save(self.original_states,self.grid.reference_json)
+                self.original_states.clear()
             self.poses.clear_map_poses()
             if self.alignment:
                 self.alignment.clear_samples()
@@ -252,6 +280,13 @@ class MapMission:
             self.observation_count = self.last_terrain_stamp = 0
             self._event("map_relocalized")
         self.localization_revision = revision
+        if "support_state" in value:
+            support_stamp = value["support_stamp_ns"]
+            if self.support_stamp is None or support_stamp >= self.support_stamp:
+                self.support_stamp = support_stamp
+                state = value["support_state"]
+                if abs(stamp-support_stamp) <= self.pose_timeout*1e9:
+                    self.supported = state == "standing" or (state == "walking" and self.supported)
         self.pose = {**pose, "timestamp_ns": stamp}
         self.poses.update_map_pose(self.pose)
         if self.start_xy is None:
@@ -295,7 +330,11 @@ class MapMission:
         else:
             self.grid.save(changed,reference)
 
-    def update_terrain(self, values, stamp):
+    def update_terrain(self, values, stamp, frames=None):
+        if frames and self.surfaces is not None:
+            for frame in sorted(frames,key=lambda f:f.stamp):
+                if frame.stamp >= self.revision_start:
+                    self.surfaces.merge(frame)
         if stamp <= self.last_terrain_stamp:
             return
         pose = self.poses.nearest_map_pose(timestamp_ns=stamp, max_delta_s=self.max_pair_delta)
@@ -319,6 +358,9 @@ class MapMission:
                     fixed = True
             elif item.get("ground_continuous") is True and item.get("clearance_ok") is True:
                 self.wall_views.pop(cell,None)
+            if (frames and not fixed and not item.get("occupied") and not item.get("clearance_ok")
+                    and self.surfaces.covers_cell(cell,self.grid.resolution,self.grid.terrain["body_radius_m"])):
+                item = dict(item,ground_continuous=True,clearance_ok=True,step_ok=True,slope_ok=True)
             clear = all(item.get(k) is True for k in ("ground_continuous", "clearance_ok", "step_ok", "slope_ok"))
             if fixed:
                 labels[cell] = BLOCKED
@@ -336,6 +378,8 @@ class MapMission:
             return
         confirmed = {}
         for cell, label in labels.items():
+            if frames is None and label != CLEAR:
+                self.external_closed.add(cell)
             if label != CLEAR:
                 self.closed.add(cell)
                 self.live_clear.pop(cell,None)
@@ -346,6 +390,7 @@ class MapMission:
                 continue
             if label == CLEAR:
                 self.closed.discard(cell)
+                self.external_closed.discard(cell)
                 self.live_clear[cell] = stamp
             self.observed[cell] = confirmed[cell] = label
         self.observation_count += 1
@@ -354,6 +399,24 @@ class MapMission:
             evidence = {cell:(label,source_xy) for cell,label in confirmed.items()}
             self.survey_evidence.update(evidence)
             self._commit(evidence)
+
+    def _use_sweep(self):
+        return (self.surfaces is not None and self.supported and self.surfaces.measured and
+                abs(time.time_ns()-self.support_stamp) <= self.pose_timeout*1e9)
+
+    def _metric_pose(self):
+        return self.pose["x"],self.pose["y"],math.radians(self.pose["yaw_deg"])
+
+    def _braking_time(self, speed):
+        return abs(speed)/(2*self.controller.brake_decel_mps2) + self.controller.command_latency_s + 1/self.controller.control_hz
+
+    def _straight_clearance(self, vx, wz):
+        # Use the cruise-speed horizon during acceleration as well. A millimetre-wide
+        # first command cannot give a representative ground sample across the corridor.
+        speed = vx if wz else math.copysign(self.controller.max_speed_mps,vx)
+        return self.surfaces.sweep(self._metric_pose(),self.controller.half_length_m,
+                                   self.controller.corridor_half_width_m,speed,wz,self._braking_time(speed),
+                                   time.time_ns()-int(self.terrain_timeout*1e9))
 
     def _walkable(self, cell, phase):
         if cell in self.closed:
@@ -394,10 +457,16 @@ class MapMission:
                 if dx*dx + dy*dy > extra*extra:
                     continue
                 cell = (ix, iy)
-                if cell in self.closed or self.patrol and self.map_located and self._clearance(cell) >= 0 and self.grid.cells.get(cell) != CLEAR:
+                if cell in (self.external_closed if self._use_sweep() else self.closed) or self.patrol and self.map_located and self._clearance(cell) >= 0 and self.grid.cells.get(cell) != CLEAR:
                     return "turning disk intersects blocked terrain"
                 if self.live_clear.get(cell, 0) < oldest:
                     unknown = True
+        if self._use_sweep():
+            state = self.surfaces.turn(self._metric_pose(),radius,self.controller.half_length_m,
+                                       self.controller.body_half_width_m)
+            if state == "blocked":
+                return "turning disk intersects blocked terrain"
+            unknown = state != "clear"
         if unknown:
             return "turning disk needs fresh ground clearance"
         return ""
@@ -417,7 +486,16 @@ class MapMission:
         start = self.grid.cell((x,y))
         yaw = math.radians(self.pose["yaw_deg"])
         now = time.time_ns()
-        stop_s = abs(vx)/(2*self.controller.brake_decel_mps2) + self.controller.command_latency_s + 1/self.controller.control_hz
+        fine = self._use_sweep()
+        if self.probing and not fine:
+            self.waiting_for_clearance = True
+            return False
+        if fine and vx:
+            state = self._straight_clearance(vx,wz)
+            if state != "clear":
+                self.waiting_for_clearance = state == "unknown"
+                return False
+        stop_s = self._braking_time(vx)
         steps = max(1, math.ceil(abs(vx)*stop_s / (self.grid.resolution/5)))
         dt = stop_s / steps
         for _ in range(steps):
@@ -425,9 +503,13 @@ class MapMission:
             y += vx*dt*math.sin(yaw + wz*dt/2)
             yaw += wz*dt
             cell = self.grid.cell((x,y))
-            if cell in self.closed or (cell != start and not self._allowed(cell, self.phase)):
+            if self.patrol and self.map_located and self._clearance(cell) >= 0 and self.grid.cells.get(cell) != CLEAR:
                 return False
-            if now-self.live_clear.get(cell,0) > self.terrain_timeout*1e9:
+            if (cell in (self.external_closed if fine else self.closed) or
+                    (cell != start and not self._allowed(cell,self.phase) and
+                     not (self.probing and self.grid.cells.get(cell,UNKNOWN) == UNKNOWN))):
+                return False
+            if not fine and now-self.live_clear.get(cell,0) > self.terrain_timeout*1e9:
                 self.waiting_for_clearance = True
                 return False
             if self.phase == "startup" and math.dist((x,y), self.start_xy) > self.startup_radius:
@@ -458,15 +540,50 @@ class MapMission:
             if adj not in self.observed and (self.resurvey or adj not in self.grid.cells):
                 yield yaw
 
+    def _start_forward_probe(self, cell, headings):
+        # A frontier is a direction to inspect. Only the measured braking strip is authorized
+        # on each control tick. Discovering a frontier never colours the underlying survey cell.
+        x, y, yaw = self._metric_pose()
+        heading = (int(math.floor((math.degrees(yaw)+45)/90))*90+180)%360-180
+        key = cell,heading
+        if (self.phase != "explore" or heading%360 not in {h%360 for h in headings} or key in self.probe_views or
+                self._straight_clearance(self.controller.max_speed_mps,0) != "clear"):
+            return False
+        distance = 0.
+        step = min(self.grid.resolution/2,self.surfaces.size)
+        for i in range(1,math.floor(self.surfaces.range/step)+1):
+            d = i*step
+            point = x+d*math.cos(yaw), y+d*math.sin(yaw)
+            target = self.grid.cell(point)
+            if (self.fence.clearance(*point) < self.margin or target in self.external_closed or
+                    (target != cell and self.grid.cells.get(target) == BLOCKED)):
+                break
+            distance = d
+        if distance <= self.controller.target_tolerance_m:
+            return False
+        goal = x+distance*math.cos(yaw), y+distance*math.sin(yaw)
+        result = self.controller.start(task_id=self.runtime.task_id,target_x=goal[0],target_y=goal[1],
+                    route_start_x=x,route_start_y=y,command_source="mapping",goal_kind="frontier",requires_stop=False)
+        if result["accepted"]:
+            self.probing = True
+            self.leg, self.goal_xy = [cell],goal
+            self._event("following_frontier")
+            return True
+        return False
+
     def _observe_from(self, cell):
-        headings = list(self._unknown_headings(cell)) or [0]
+        headings = list(self._unknown_headings(cell))
+        if headings and self._use_sweep() and self._start_forward_probe(cell,headings):
+            return
+        headings = headings or [0]
         heading = next((yaw for yaw in headings if (cell,yaw) not in self.view_headings),None)
         if heading is None:
             self.scanned_views.add(cell)
             return
         delta = (heading-self.pose["yaw_deg"]+180)%360-180
         if abs(math.radians(delta)) > self.controller.turn_tolerance_rad:
-            if time.time_ns()-self.live_clear.get(cell,0) > self.terrain_timeout*1e9:
+            if (self.turn_clearance(self.controller.turn_radius_m) if self._use_sweep() else
+                    time.time_ns()-self.live_clear.get(cell,0) > self.terrain_timeout*1e9):
                 self._event("waiting_for_ground_clearance")
                 return
             self.view_wait = None
@@ -514,6 +631,10 @@ class MapMission:
                 self._hold(reason)
                 self.inputs_missing = True
                 return
+        if self.support_stamp is not None and (not self.supported or abs(now-self.support_stamp) > self.pose_timeout*1e9):
+            self._hold("waiting_for_base_support")
+            self.inputs_missing = True
+            return
         self.inputs_missing = False
         xy = (self.pose["x"], self.pose["y"])
         start = self.grid.cell(xy)
@@ -532,17 +653,20 @@ class MapMission:
         self.runtime.stage = "executing"
         if start in self.leg and self.leg[-1] != start:
             self.leg = self.leg[self.leg.index(start)+1:]
-        if self.leg and any(not self._allowed(c, phase) for c in self.leg):
+        if self.probing:
+            self.leg = [start]
+        observing_here = self.goal_xy is None and self.leg == [start] and self._use_sweep()
+        if self.leg and not (self.probing or observing_here) and any(not self._allowed(c,phase) for c in self.leg):
             self._halt("replan")
         if self.controller.is_active() or self.leg:
             return
         if phase == "patrol" and self.grid.cells.get(start) != CLEAR:
             self._event("waiting_for_green_start")
             return
-        if start in self.closed:
+        if start in (self.external_closed if self._use_sweep() else self.closed):
             self._event("current_footprint_obstructed")
             return
-        if not self.observation_count:
+        if not self.observation_count and not self._use_sweep():
             self._event("waiting_for_terrain_coverage")
             return
         parents = reachable_paths(start, lambda c: self._allowed(c,phase), self.edges)
@@ -617,6 +741,9 @@ class MapMission:
             self._hold("waiting_for_ground_clearance")
             return
         if self.motion_denied or result.get("reason") == "obstacle blocked timeout":
+            if self.probing:
+                heading = (int(math.floor((self.pose["yaw_deg"]+45)/90))*90+180)%360-180
+                self.probe_views.add((self.leg[0],heading))
             current = self.grid.cell((self.pose["x"], self.pose["y"]))
             steps = [c for c in self.leg if c in neighbors(current)]
             if steps:
@@ -628,6 +755,7 @@ class MapMission:
             self._halt("route_blocked")
             self._event("replanning")
         elif result.get("state") == "completed":
+            self.probing = False
             self.hold_since = self.hold_cell = None
             if self.inspection:
                 self.visited.append(self.inspection)
@@ -646,4 +774,4 @@ class MapMission:
         elif self.hold_since is not None and (result.get("vx",0) or result.get("wz",0)):
             self.hold_since = self.hold_cell = None
             self._event("turning_to_observe" if self.goal_xy is None else
-                        ("returning_inside" if self.phase == "return" else "following_path"))
+                        ("following_frontier" if self.probing else "returning_inside" if self.phase == "return" else "following_path"))
