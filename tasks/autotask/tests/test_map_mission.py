@@ -446,3 +446,89 @@ def test_dev_profile_turn_uses_recent_terrain_outside_the_certified_body_radius(
     # From the middle the centre cell alone already certifies the whole disk.
     pose(w,0.5,0.5)
     assert m.motion_allowed(0,0.2)
+
+
+def test_short_scan_gap_keeps_route_and_resumes_only_with_clear_terrain(tmp_path):
+    w, m = task(tmp_path,"area_explore",reference_mode="local")
+    pose(w,.5,.5)
+    scan(w)
+    for _ in range(2):
+        terrain(w,clear=[(0,0),(1,0),(2,0)],walls=[(-1,0),(0,1),(0,-1),(1,1),(1,-1)])
+    m.tick()
+    m.tick_control()
+    goal, leg = m.goal_xy, m.leg.copy()
+    assert goal == (2.5,.5) and m.controller.snapshot()["last_vx"] > 0
+    m.last_scan_stamp -= 2_000_000_000
+    m.tick()
+    m.tick_control()
+    assert m.controller.snapshot()["last_vx"] == 0 and m.runtime.event == "waiting_for_laser_scan"
+    assert m.goal_xy == goal and m.leg == leg and m.controller.is_active()
+    scan(w)
+    m.controller._monotonic_getter = lambda: time.monotonic()+.12
+    m.tick()
+    m.tick_control()
+    assert m.goal_xy == goal and m.controller.snapshot()["last_vx"] > 0
+    assert m.runtime.event == "following_path" and m.hold_since is None
+    terrain(w,occupied=[(1,0)])
+    m.tick()
+    m.tick_control()
+    assert m.goal_xy != goal and m.controller.snapshot()["last_vx"] == 0
+
+
+def test_depth_projection_allows_control_and_discards_cancelled_work(tmp_path,monkeypatch):
+    from threading import Event, Thread
+    import uran_autotask_plugin.worker as module
+    w,m = task(tmp_path,"area_explore",reference_mode="local")
+    pose(w,.5,.5)
+    entered, release = Event(), Event()
+    def computing(*args):
+        entered.set()
+        release.wait(2)
+        return [{"x_m":.5,"y_m":.5,"fixed_obstacle":True}]
+    monkeypatch.setattr(module,"terrain_cells",computing)
+    t=Thread(target=observe,args=(w,"depth_rays",{"map_id":"quad","ground_xyz":[.5,.5,0],
+               "beams":[{"origin":[.5,.5,.3],"points":[[.6,.5,0]]}]}))
+    t.start()
+    try:
+        assert entered.wait(1)
+        acquired = w.lock.acquire(timeout=.15)
+        assert acquired, "terrain projection held the control lock"
+        try:
+            m.stop_current_operation(reason="cancelled")
+        finally:
+            w.lock.release()
+    finally:
+        release.set()
+        t.join()
+    assert m.observation_count == 0
+
+
+def test_exploration_speed_cap_stale_data_and_drop(tmp_path,monkeypatch):
+    config = dict(robot_length_m=.60,robot_width_m=.40,safety_margin_m=.15,turn_radius_m=.50,
+                  default_speed_mps=.15,max_speed_mps=.15)
+    w,m = task(tmp_path,"area_explore",reference_mode="local",straight_drive=config)
+    clock = [time.monotonic()]
+    epoch = time.time_ns()
+    initial = clock[0]
+    m.controller._monotonic_getter = lambda: clock[0]
+    monkeypatch.setattr(time,"monotonic",lambda: clock[0])
+    monkeypatch.setattr(time,"time_ns",lambda: epoch+int((clock[0]-initial)*1e9))
+    cells=[(x,0) for x in range(5)]
+    walls=[(-1,0)]+[(x,y) for x in range(4) for y in (-1,1)]
+    def step(laser=True, drop=False):
+        clock[0] += .1
+        pose(w,.5,.5)
+        if laser: scan(w)
+        if drop:
+            observe(w,"terrain_cells",{"map_id":"quad","cells":[{"x_m":.5,"y_m":.5,"step_ok":False}]})
+        else:
+            terrain(w,clear=cells,walls=walls)
+        m.tick()
+        m.tick_control()
+        return m.controller.snapshot()["last_vx"]
+    speeds=[step() for _ in range(12)]
+    assert max(speeds)==.15 and speeds[-1]==.15
+    velocities=[step(laser=False) for _ in range(55)]
+    assert velocities[-45:]==[0.]*45 and not m.leg
+    assert all(step(drop=True)==0 for _ in range(3))
+    assert m.has_active_task() and m.runtime.event=="current_footprint_obstructed"

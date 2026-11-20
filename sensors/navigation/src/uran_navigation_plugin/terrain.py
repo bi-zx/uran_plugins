@@ -32,8 +32,7 @@ def terrain_cells(beams, ground_xyz, resolution, config, body_xy=None):
     padding = math.ceil(body_radius / size)
     ground_x, ground_y, ground_z = ground_xyz
     surface = defaultdict(list)
-    free = set()
-    candidates = set()
+    rays = []
 
     for group in beams:
         ox, oy, oz = group["origin"]
@@ -47,16 +46,13 @@ def terrain_cells(beams, ground_xyz, resolution, config, body_xy=None):
                 continue
             tx, ty, tz = math.floor(x/size), math.floor(y/size), math.floor(z/size)
             surface[(tx,ty)].append(z)
-            for cx in range((tx-padding)//tiles_per_cell, (tx+padding)//tiles_per_cell+1):
-                for cy in range((ty-padding)//tiles_per_cell, (ty+padding)//tiles_per_cell+1):
-                    candidates.add((cx,cy))
-            # Stop before the return. A missing or saturated return contributes no free space.
-            steps = math.ceil(2*distance/size)
-            for i in range(1,steps):
-                t = i/steps
-                voxel = (math.floor((ox+dx*t)/size), math.floor((oy+dy*t)/size), math.floor((oz+dz*t)/size))
-                if voxel != (tx,ty,tz):
-                    free.add(voxel)
+            rays.append((ox,oy,oz,dx,dy,dz,distance,(tx,ty,tz)))
+
+    candidates = set()
+    for tx,ty in surface:
+        for cx in range((tx-padding)//tiles_per_cell, (tx+padding)//tiles_per_cell+1):
+            for cy in range((ty-padding)//tiles_per_cell, (ty+padding)//tiles_per_cell+1):
+                candidates.add((cx,cy))
 
     heights, drops, occupied, tall_surface = {}, set(), set(), set()
     for (tx,ty), hits in surface.items():
@@ -75,6 +71,7 @@ def terrain_cells(beams, ground_xyz, resolution, config, body_xy=None):
             occupied.add((tx,ty))
 
     results = []
+    check_clearance = []
     for cx,cy in sorted(candidates):
         tiles = {(x,y) for x in range(cx*tiles_per_cell-padding, (cx+1)*tiles_per_cell+padding)
                        for y in range(cy*tiles_per_cell-padding, (cy+1)*tiles_per_cell+padding)}
@@ -92,9 +89,23 @@ def terrain_cells(beams, ground_xyz, resolution, config, body_xy=None):
             row["ground_continuous"] = True
             row["step_ok"] = True
             row["slope_ok"] = all(d <= slope*size for d in jumps)
-            if row["slope_ok"] and all((x,y,k) in free for x,y in tiles for k in
-                    range(max(math.floor(heights[(x,y)]/size)+1, math.floor((heights[(x,y)]+max_step)/size)),
-                          math.floor((heights[(x,y)]+body_height)/size)+1)):
-                row["clearance_ok"] = True
+            if row["slope_ok"]:
+                check_clearance.append((row,tiles))
         results.append(row)
+
+    # Free-space rays affect only cells with complete, continuous ground support.
+    if check_clearance:
+        free = set()
+        for ox,oy,oz,dx,dy,dz,distance,endpoint in rays:
+            steps = math.ceil(2*distance/size)
+            for i in range(1,steps):
+                t = i/steps
+                voxel = (math.floor((ox+dx*t)/size), math.floor((oy+dy*t)/size), math.floor((oz+dz*t)/size))
+                if voxel != endpoint:
+                    free.add(voxel)
+        for row,tiles in check_clearance:
+            if all((x,y,k) in free for x,y in tiles for k in
+                   range(max(math.floor(heights[(x,y)]/size)+1, math.floor((heights[(x,y)]+max_step)/size)),
+                         math.floor((heights[(x,y)]+body_height)/size)+1)):
+                row["clearance_ok"] = True
     return results

@@ -89,6 +89,8 @@ class MapMission:
         self.outcome, self.detail = "", ""
         self.clearances = {}
         self.motion_denied = False
+        self.inputs_missing = False
+        self.hold_since = self.hold_cell = None
 
     @property
     def map_located(self):
@@ -118,6 +120,20 @@ class MapMission:
         self.leg = []
         self.goal_xy = self.inspection = None
         self.motion_denied = self.waiting_for_clearance = False
+        self.inputs_missing = False
+        self.hold_since = self.hold_cell = None
+
+    def _hold(self, reason):
+        if self.controller.is_active():
+            if self.hold_since is None:
+                self.hold_since = time.monotonic()
+                self.hold_cell = self.grid.cell((self.pose["x"], self.pose["y"]))
+            timeout = self.controller.fault_pause_timeout_s
+            if timeout and time.monotonic() - self.hold_since >= timeout:
+                self._halt(reason)
+            else:
+                self.controller.hard_stop(reason=reason)
+        self._event(reason)
 
     def _finish(self, outcome):
         self._halt(outcome)
@@ -491,18 +507,20 @@ class MapMission:
             self.pause_current_operation(reason="waiting_for_auto_mode")
             return
         now = time.time_ns()
-        if not self.pose or abs(now-self.pose["timestamp_ns"]) > self.pose_timeout*1e9:
-            self._halt("waiting_for_slam_pose")
-            self._event("waiting_for_slam_pose")
-            return
-        for stamp, timeout, reason in ((self.last_terrain_stamp, self.terrain_timeout, "waiting_for_terrain"),
+        for stamp, timeout, reason in ((self.pose["timestamp_ns"] if self.pose else 0, self.pose_timeout, "waiting_for_slam_pose"),
+                                       (self.last_terrain_stamp, self.terrain_timeout, "waiting_for_terrain"),
                                        (self.last_scan_stamp if self.scan_usable else 0, self.controller.scan_timeout_s, "waiting_for_laser_scan")):
             if not stamp or (timeout > 0 and abs(now-stamp) > timeout*1e9):
-                self._halt(reason)
-                self._event(reason)
+                self._hold(reason)
+                self.inputs_missing = True
                 return
+        self.inputs_missing = False
         xy = (self.pose["x"], self.pose["y"])
         start = self.grid.cell(xy)
+        if self.hold_since is not None:
+            timeout = self.controller.fault_pause_timeout_s
+            if (timeout and time.monotonic()-self.hold_since >= timeout) or (start != self.hold_cell and start not in self.leg):
+                self._halt("replan_after_sensor_gap")
         phase = self._next_phase(xy)
         if phase != self.phase:
             self._halt("phase_changed")
@@ -591,12 +609,12 @@ class MapMission:
         self._event("returning_inside" if phase == "return" else "following_path")
 
     def tick_control(self):
-        if not self.leg or not self.controller.is_active():
+        if self.inputs_missing or not self.leg or not self.controller.is_active():
             return
+        self.waiting_for_clearance = self.motion_denied = False
         result = self.controller.tick()
         if self.waiting_for_clearance or result.get("decision", {}).get("reason") == "turning disk needs fresh ground clearance":
-            self._halt("waiting_for_ground_clearance")
-            self._event("waiting_for_ground_clearance")
+            self._hold("waiting_for_ground_clearance")
             return
         if self.motion_denied or result.get("reason") == "obstacle blocked timeout":
             current = self.grid.cell((self.pose["x"], self.pose["y"]))
@@ -610,6 +628,7 @@ class MapMission:
             self._halt("route_blocked")
             self._event("replanning")
         elif result.get("state") == "completed":
+            self.hold_since = self.hold_cell = None
             if self.inspection:
                 self.visited.append(self.inspection)
                 self.pending.pop(0)
@@ -624,3 +643,7 @@ class MapMission:
         elif result.get("terminal"):
             self._halt("controller_fault")
             self.pause_current_operation(reason=result.get("code") or result.get("reason") or "controller_fault")
+        elif self.hold_since is not None and (result.get("vx",0) or result.get("wz",0)):
+            self.hold_since = self.hold_cell = None
+            self._event("turning_to_observe" if self.goal_xy is None else
+                        ("returning_inside" if self.phase == "return" else "following_path"))

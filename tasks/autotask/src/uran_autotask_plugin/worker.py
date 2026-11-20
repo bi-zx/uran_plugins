@@ -78,8 +78,11 @@ class _LocalMoveGateway:
                  reason: str, task_id: str) -> None:
         del source, task_id
         if self.map_mission is not None and not self.map_mission.motion_allowed(linear_x, angular_z):
+            if self.map_mission.waiting_for_clearance:
+                # The control tick immediately publishes zero while preserving the route.
+                return
             self.map_mission.motion_denied = True
-            self.stop(reason="waiting_for_ground_clearance" if self.map_mission.waiting_for_clearance else "outside_traversable_route")
+            self.stop(reason="outside_traversable_route")
             return
         self._send({"kind": "base_velocity", "frame_id": self.worker.body_frame,
                     "linear_mps": {"x": float(linear_x), "y": 0.0, "z": 0.0},
@@ -254,6 +257,7 @@ class AutotaskWorker(Worker):
         straight_config = dict(self.config.get("straight_drive") or {})
         is_map_task = command["task_type"] in ("area_explore", "map_patrol")
         if is_map_task:
+            straight_config["control_hz"] = min(float(straight_config.get("control_hz",20.0)), 1/self.tick_interval_s)
             resolution = float((command.get("parameters") or {}).get("resolution_m", self.config.get("mapping", {}).get("resolution_m", 0.5)))
             tolerance = min(0.15, resolution * 0.3)
             straight_config.update(target_tolerance_m=tolerance, target_tolerance_relaxed_m=tolerance,
@@ -370,6 +374,7 @@ class AutotaskWorker(Worker):
         device_id = document["source"]["device_id"]
         if self.expected_device_id and device_id != self.expected_device_id:
             raise ValueError("observation belongs to another device")
+        projections = []
         with self.lock:
             missions = [c.manager for c in self.contexts.values() if isinstance(c.manager, MapMission)
                       and c.target["device_id"] == device_id and c.manager.has_active_task() and c.manager.slam_ready]
@@ -397,14 +402,10 @@ class AutotaskWorker(Worker):
                             pose = manager.poses.nearest_map_pose(timestamp_ns=timestamp_ns, max_delta_s=manager.max_pair_delta)
                             if pose is None:
                                 continue
-                            cells = terrain_cells(value["beams"], value["ground_xyz"], manager.grid.resolution,
-                                                  manager.terrain_config, (pose["x"],pose["y"]))
-                        else:
-                            if (terrain_parameters(value.get("terrain") or {}) != manager.grid.terrain or
-                                    value.get("resolution_m", manager.grid.resolution) != manager.grid.resolution):
-                                continue
-                            cells = value["cells"]
-                        manager.update_terrain(cells, timestamp_ns)
+                            projections.append((manager, manager.localization_revision, (pose["x"],pose["y"])))
+                        elif (terrain_parameters(value.get("terrain") or {}) == manager.grid.terrain and
+                              value.get("resolution_m", manager.grid.resolution) == manager.grid.resolution):
+                            manager.update_terrain(value["cells"], timestamp_ns)
             elif kind == "laser_scan":
                 scan = VirtualLaserScan.from_observation(value)
                 for context in self.contexts.values():
@@ -422,6 +423,12 @@ class AutotaskWorker(Worker):
                     context.straight_drive.update_scan(scan)
             elif not position_recorded:
                 raise ValueError(f"unsupported task observation_type: {kind}")
+        for manager, revision, body in projections:
+            cells = terrain_cells(value["beams"], value["ground_xyz"], manager.grid.resolution, manager.terrain_config, body)
+            with self.lock:
+                if (manager.has_active_task() and manager.slam_ready and manager.runtime.stage != "paused"
+                        and manager.localization_revision == revision):
+                    manager.update_terrain(cells, timestamp_ns)
         return {"status": "succeeded", "operation_id": request["operation_id"],
                 "payload": {"observation_type": kind, "updated": True}}
 
@@ -450,7 +457,9 @@ class AutotaskWorker(Worker):
             self.battery_level = float(item)
 
     def _tick_loop(self) -> None:
-        while not self.stop_event.wait(self.tick_interval_s):
+        next_tick = time.monotonic() + self.tick_interval_s
+        while not self.stop_event.wait(max(0.0, next_tick - time.monotonic())):
+            next_tick = time.monotonic() + self.tick_interval_s
             with self.lock:
                 for context in list(self.contexts.values()):
                     if context.manager.runtime.stage in TERMINAL_TASK_STAGES:
