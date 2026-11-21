@@ -66,7 +66,7 @@ class CyberDogPolicyBackend:
         self.auto_stand_sent = False
         self.auto_stand_retry_after = 0.0
         self.suspended = False
-        self.standing_stamp = None
+        self.stationary_stamp = None
         self.last_velocity = {"linear_x": 0.0, "linear_y": 0.0,
                               "linear_z": 0.0, "angular_z": 0.0}
 
@@ -76,10 +76,10 @@ class CyberDogPolicyBackend:
             self._publish_zero()
             return self.transport.motion_result(MOTION_ESTOP)
         if command.action == "stop":
-            standing = (self.last_execute_ts == 0.0 and self.standing_stamp is not None and
-                        self.clock()-self.standing_stamp <= self.cmd_timeout_s)
-            self._reset_motion(keep_idle=not standing)
-            if not standing:
+            stopped = (self.last_execute_ts == 0.0 and self.stationary_stamp is not None and
+                        self.clock()-self.stationary_stamp <= self.cmd_timeout_s)
+            self._reset_motion(keep_idle=not stopped)
+            if not stopped:
                 self._publish_zero()
             return MotionResult(True, "OK", applied=dict(self.last_velocity))
         if self.suspended:
@@ -148,7 +148,9 @@ class CyberDogPolicyBackend:
 
     def update_motion_status(self, switch_status: int, motion_id=None, contact=None) -> None:
         status = int(switch_status)
-        self.standing_stamp = (self.clock() if support_state(status,motion_id,contact) == "standing" else None)
+        standing = support_state(status,motion_id,contact) == "standing"
+        resting = motion_id in (MOTION_GET_DOWN,MOTION_ESTOP) and contact == 0
+        self.stationary_stamp = self.clock() if standing or resting else None
         if status == SWITCH_CHARGING and self._charger_disconnected_timed_out():
             status = SWITCH_NORMAL
         self.switch_status = status

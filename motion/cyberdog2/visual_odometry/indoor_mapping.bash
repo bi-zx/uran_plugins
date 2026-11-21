@@ -88,18 +88,20 @@ start mapping "$laser" --ros-args -r __node:=map_builder -r __ns:="$survey" --pa
 depth_args=(-p depth_image_topic:=camera/depth/image_rect_raw -p depth_camera_info_topic:=camera/depth/camera_info \
     -p ground_frame:=odom -p odom_topic:=odom_out -p odom_body_alias:=base_link_leg -p use_odometry_ground_plane:=true \
     -p planar_pose_topic:="$survey/dog_pose" -p sensor_adapter:=uran_cyberdog2_plugin.map_sensors:bind_sensors -p rear_tof_topic:=rear_tof_payload)
+observation_args=(-r "/uran/runtime/dispatch:=${OBSERVATION_TOPIC:-$survey/observations}" -p "device_id:=${DEVICE_ID:-${base##*/}}" -p component_id:=base)
+start laser_observations "$exe/laser_observations" --ros-args -r __ns:="$base" "${observation_args[@]}" -p scan_topic:="$base/scan"
 start sensors nice -n 4 "$exe/survey_sensors" --ros-args -r __ns:="$base" "${depth_args[@]}" \
     -p unknown_range:=zero -p depth_pixel_stride:=4 -p max_wait_s:=1.1 \
     -r map_observations:__node:=survey_observations \
-    -r /uran/runtime/dispatch:="${OBSERVATION_TOPIC:-$survey/observations}" -p map_id:="$map_id" -p map_frame:=laser_odom -p pose_topic:="$survey/dog_pose" -p pose_includes_odometry:=true \
-    -p device_id:="${DEVICE_ID:-${base##*/}}" -p component_id:=base -p reference_mode:=local -r survey_observations:scan:="$base/scan" -p terrain_max_age_s:=1.0 -p depth_rate_hz:=1.5 -p surface_topic:="$survey/surfaces"
+    "${observation_args[@]}" -p publish_scan_observations:=false -p map_id:="$map_id" -p map_frame:=laser_odom -p pose_topic:="$survey/dog_pose" -p pose_includes_odometry:=true \
+    -p reference_mode:=local -p terrain_max_age_s:=1.0 -p depth_rate_hz:=1.5 -p surface_topic:="$survey/surfaces"
 start grid nice -n 4 "$exe/survey_map" --ros-args -r __ns:="$survey" -p map_id:="$map_id" -p scan_topic:="$base/scan_fused" -p pose_topic:=dog_pose \
     -p map_frame:=laser_odom -p coverage_file:="$room/coverage.sqlite" -p surface_topic:="$survey/surfaces"
 python3 - "$base" "$survey" <<'PY'
 import sys,time,rclpy
 from lifecycle_msgs.srv import ChangeState
 base,survey=sys.argv[1:];rclpy.init(args=[]);n=rclpy.create_node('start_visual_survey')
-need={('fused_scan',base),('survey_observations',base),('survey_map',survey),('map_builder',survey),('scan_imu_sync',survey)}
+need={('laser_observations',base),('fused_scan',base),('survey_observations',base),('survey_map',survey),('map_builder',survey),('scan_imu_sync',survey)}
 end=time.monotonic()+40
 while time.monotonic()<end:
     if need.issubset(n.get_node_names_and_namespaces()):break

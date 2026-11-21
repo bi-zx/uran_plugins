@@ -96,3 +96,13 @@ def test_stop_keeps_fresh_four_foot_stand_and_stops_a_pending_walk():
     now[0] += 1
     transport.servo.clear()
     assert backend.stop().accepted and transport.servo[-1]["vx"] == 0.0
+
+def test_normal_stop_preserves_idle_resting_postures():
+    for posture in (101, 0):
+        transport = Transport()
+        backend = CyberDogPolicyBackend(transport, idle_to_stand_timeout_s=0.1, clock=lambda: 4.0)
+        backend.update_motion_status(SWITCH_NORMAL,posture,0)
+        assert backend.stop().accepted
+        backend.tick()
+        assert transport.servo == [] and transport.motions == []
+        assert backend.idle_zero_since is None
