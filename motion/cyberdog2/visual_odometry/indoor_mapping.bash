@@ -9,7 +9,9 @@ map_id=$(basename "$room")
 here=$(cd "$(dirname "$0")" && pwd)
 visual=${VISUAL_ODOMETRY_BIN:-$PWD/build/visual_odometry/visual_odometry}
 exe="$(ros2 pkg prefix uran_ros2_adapter)/lib/uran_ros2_adapter"
-laser="$(ros2 pkg prefix laser_slam)/lib/laser_slam/mapping"
+laser=${LASER_SLAM_BIN:-$PWD/build/ordered_slam/mapping}
+if [[ -z ${LASER_SLAM_BIN:-} && ! -x "$laser" ]]; then laser="$(ros2 pkg prefix laser_slam)/lib/laser_slam/mapping"; fi
+[[ -x "$laser" ]] || { echo "Mapping executable unavailable: $laser" >&2; exit 2; }
 saver="$(ros2 pkg prefix nav2_map_server)/lib/nav2_map_server/map_saver_cli"
 export PYTHONPATH="$here/../src:${PYTHONPATH:-}" OPENBLAS_NUM_THREADS=1
 test -x "$visual" || { echo "Build the visual_odometry executable first" >&2; exit 2; }
@@ -80,7 +82,7 @@ start() {
     setsid "$@" 9>&- </dev/null >"$room/log/$name.log" 2>&1 &
     pids+=("$!")
 }
-start sync "$exe/scan_imu_sync" --ros-args -r __ns:="$survey" -r "scan:=$base/scan" -r "imu:=$base/camera/imu"
+start sync "$exe/scan_imu_sync" --ros-args -p max_pending_scans:=3 -r __ns:="$survey" -r "scan:=$base/scan" -r "imu:=$base/camera/imu"
 start mapping "$laser" --ros-args -r __node:=map_builder -r __ns:="$survey" --params-file "$room/config/mapping_node.yaml" \
     -r "$survey/camera/imu:=$base/camera/imu" -r "$survey/visual_odom:=$base/visual_odom" -r "$survey/scan:=$survey/scan_synchronized" -r /tf:="$survey/tf"
 depth_args=(-p depth_image_topic:=camera/depth/image_rect_raw -p depth_camera_info_topic:=camera/depth/camera_info \
